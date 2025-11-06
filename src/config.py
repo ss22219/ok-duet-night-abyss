@@ -7,16 +7,15 @@ version = "dev"
 #不需要修改version, Github Action打包会自动修改
 
 key_config_option = ConfigOption('Game Hotkey Config', { #全局配置示例
-    'Echo Key': 'q',
-    'Liberation Key': 'r',
-    'Resonance Key': 'e',
-    'Tool Key': 't',
+    'Combat Key': 'e',
+    'Ultimate Key': 'q',
+    'Geniemon Key': 'z',
 }, description='In Game Hotkey for Skills')
 
 
 def make_bottom_right_black(frame): #可选. 某些游戏截图时遮挡UID使用
     """
-    Changes a portion of the frame's pixels at the bottom right to black.
+    Changes a portion of the frame's pixels at the bottom middle to black.
 
     Args:
         frame: The input frame (NumPy array) from OpenCV.
@@ -33,14 +32,15 @@ def make_bottom_right_black(frame): #可选. 某些游戏截图时遮挡UID使�
         black_height = int(0.025 * height)
 
         # Calculate the starting coordinates of the rectangle
-        start_x = width - black_width
+        start_x = width // 2 - black_width // 2
+        end_x = start_x + black_width
         start_y = height - black_height
 
         # Create a black rectangle (NumPy array of zeros)
         black_rect = np.zeros((black_height, black_width, frame.shape[2]), dtype=frame.dtype)  # Ensure same dtype
 
-        # Replace the bottom-right portion of the frame with the black rectangle
-        frame[start_y:height, start_x:width] = black_rect
+        # Replace the bottom-middle portion of the frame with the black rectangle
+        frame[start_y:height, start_x:end_x] = black_rect
 
         return frame
     except Exception as e:
@@ -63,18 +63,20 @@ config = {
             'use_openvino': True,
         }
     },
-    'windows': {  # Windows游戏请填写此设置
-        'exe': ['StarRail.exe'],
-        # 'hwnd_class': 'UnrealWindow', #增加重名检查准确度
-        'interaction': 'Genshin', # Genshin:某些操作可以后台, 部分游戏支持 PostMessage:可后台点击, 极少游戏支持 ForegroundPostMessage:前台使用PostMessage Pynput/PyDirect:仅支持前台使用
-        'can_bit_blt': True,
-        'bit_blt_render_full': True,
+    # required if using feature detection
+    'template_matching': {
+        'coco_feature_json': os.path.join('assets', 'result.json'),
+        'default_horizontal_variance': 0.002,
+        'default_vertical_variance': 0.002,
+        'default_threshold': 0.8,
+    },
+    'windows': {  # required  when supporting windows game
+        'exe': ['EM-Win64-Shipping.exe'],
+        'hwnd_class': 'UnrealWindow', #增加重名检查准确度
+        'interaction': 'PostMessage', #支持大多数PC游戏后台点击
+        'capture_method': ['WGC', 'BitBlt_RenderFull'],  # Windows版本支持的话, 优先使用WGC, 否则使用BitBlt_Full
         'check_hdr': True, #当用户开启AutoHDR时候提示用户, 但不禁止使用
         'force_no_hdr': False, #True=当用户开启AutoHDR时候禁止使用
-        'require_bg': True # 要求使用后台截图
-    },
-    'adb': {  # Windows游戏请填写此设置, mumu模拟器使用原生截图和input,速度极快. 其他模拟器和真机使用adb,截图速度较慢
-        'packages': ['com.abc.efg1', 'com.abc.efg1']
     },
     'start_timeout': 120,  # default 60
     'window_size': { #ok-script窗口大小
@@ -101,20 +103,26 @@ config = {
             }
         },
     'screenshots_folder': "screenshots", #截图存放目录, 每次重新启动会清空目录
-    'gui_title': 'ok-script-boilerplate',  #窗口名
-    'template_matching': { # 可选, 如使用OpenCV的模板匹配
+    'gui_title': 'ok-duet-night-abyss',  # Optional
+    'template_matching': {
         'coco_feature_json': os.path.join('assets', 'result.json'), #coco格式标记, 需要png图片, 在debug模式运行后, 会对进行切图仅保留被标记部分以减少图片大小
         'default_horizontal_variance': 0.002, #默认x偏移, 查找不传box的时候, 会根据coco坐标, match偏移box内的
         'default_vertical_variance': 0.002, #默认y偏移
         'default_threshold': 0.8, #默认threshold
     },
     'version': version, #版本
-    'my_app': ['src.globals', 'Globals'], #可选. 全局单例对象, 可以存放加载的模型, 使用og.my_app调用
-    'onetime_tasks': [  # 用户点击触发的任务
-        ["src.tasks.MyOneTimeTask", "MyOneTimeTask"],
+    'my_app': ['src.globals', 'Globals'], # 全局单例对象, 可以存放加载的模型, 使用og.my_app调用
+    'onetime_tasks': [  # tasks to execute
+        ["src.tasks.AutoSkill", "AutoSkill"],
+        ["src.tasks.AutoExpulsion", "AutoExpulsion"],
+        ["src.tasks.AutoDefence", "AutoDefence"],
+        ["src.tasks.AutoExploration", "AutoExploration"],
+        ["src.tasks.AutoExcavation", "AutoExcavation"],
         ["ok", "DiagnosisTask"],
     ],
-    'trigger_tasks':[ # 不断执行的触发式任务
-        ["src.tasks.MyTriggerTask", "MyTriggerTask"],
+    'trigger_tasks':[
+        ["src.tasks.AutoCombatTask", "AutoCombatTask"],
+        ["src.tasks.AutoMoveTask", "AutoMoveTask"],
+        ["src.tasks.ClickDialogTask", "ClickDialogTask"],
     ]
 }
