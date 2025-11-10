@@ -1,6 +1,6 @@
 <div align="center">
   <img src="icons/icon.png" alt="icon" width="200"><br>
-  <h1>ok-duet-night-abyss</h1>
+  <h1>ok-dna</h1>
   <img src="https://img.shields.io/badge/platform-Windows-blue" alt="platform">
   <img alt="Static Badge" src="https://img.shields.io/badge/python-3.12%2B-skyblue">
 
