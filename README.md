@@ -50,9 +50,10 @@ python main.py # run the release version 运行发行版
 python main_debug.py # run the debug version 运行调试版
 ```
 
-### QQ群
+### 社区
 * 用户群 1063846003
 * 开发者群 259268560
+* [Discord](https://discord.gg/vVyCatEBgA)
 
 ### 相关项目
 
