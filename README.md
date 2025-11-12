@@ -7,7 +7,8 @@
   <img alt="GitHub Release" src="https://img.shields.io/github/v/release/BnanZ0/ok-duet-night-abyss">
   <a href="https://discord.gg/vVyCatEBgA"><img alt="Discord" src="https://img.shields.io/discord/296598043787132928?color=5865f2&label=%20Discord"></a>
 </div>
-### 一个基于图像识别的二重螺旋自动化程序，支持后台运行，基于 [ok-script](https://github.com/ok-oldking/ok-script)开发。
+
+### 一个基于图像识别的二重螺旋自动化程序，支持后台运行，基于[ok-script](https://github.com/ok-oldking/ok-script)开发。
 
 ## 免责声明
 
@@ -33,7 +34,7 @@ This software is open source, free of charge and for learning and exchange purpo
 * 快速移动
   * 自动穿引共鸣
 * 自动花序弓蓄力
-* 后台运行
+* 支持PC版游戏后台运行
 
 ## 兼容性
 * 支持 1600x900 以上的 16:9 分辨率
