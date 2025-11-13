@@ -229,8 +229,9 @@ class CommissionsTask(BaseDNATask):
 
     def choose_letter_reward_zero(self):
         self.wait_until(
-            condition=lambda: self.find_next_hint(0.60, 0.64, 0.67, 0.67, r'[:：]'),
-            time_out=2)
+            condition=lambda: self.find_next_hint(0.60, 0.64, 0.67, 0.67, r'[:：]')
+                          and self.find_next_hint(0.33, 0.64, 0.40, 0.67, r'[:：]'),
+            time_out=4)
         if self.find_next_hint(0.33, 0.64, 0.40, 0.67, r'[:：]0'):
             self.log_info("选择第一个奖励", True)
             self.click(0.36, 0.66, after_sleep=0.5)
