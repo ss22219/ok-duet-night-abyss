@@ -91,7 +91,7 @@ msgid "使用键盘"
 msgstr "Usar Teclado"
 
 msgid "全自动"
-msgstr "Totalmente automático"
+msgstr "Full-Auto"
 
 msgid "刷几次"
 msgstr "Número de intentos"
@@ -103,7 +103,7 @@ msgid "副本类型"
 msgstr "Tipo de Mazmorra"
 
 msgid "半自动"
-msgstr "Semiautomático"
+msgstr "Semi-Auto"
 
 msgid "单次提示响几次"
 msgstr "Sonidos de alerta por notificación"

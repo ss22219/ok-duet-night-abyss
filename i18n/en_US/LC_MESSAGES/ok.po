@@ -91,7 +91,7 @@ msgid "使用键盘"
 msgstr "Use Keyboard"
 
 msgid "全自动"
-msgstr "Fully Automatic"
+msgstr "Full-Auto"
 
 msgid "刷几次"
 msgstr "Number of Runs"
@@ -103,7 +103,7 @@ msgid "副本类型"
 msgstr "Dungeon Type"
 
 msgid "半自动"
-msgstr "Semi-Automatic"
+msgstr "Semi-Auto"
 
 msgid "单次提示响几次"
 msgstr "Alert sounds per notification"
