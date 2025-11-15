@@ -41,7 +41,7 @@ class Auto65ArtifactTask_Fast(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
     def run(self):
         """主运行方法"""
         DNAOneTimeTask.run(self)
-        self.move_mouse_to_safe_position()
+        self.move_mouse_to_safe_position(save_current_pos=False)
         self.set_check_monthly_card()
         try:
             return self.do_run()

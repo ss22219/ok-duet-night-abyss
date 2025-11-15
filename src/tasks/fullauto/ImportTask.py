@@ -78,7 +78,7 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         self.script = self.process_json_files(f'{path}\mod\{self.config.get('外部文件夹')}\scripts')
         self.img = self.load_png_files(f'{path}\mod\{self.config.get('外部文件夹')}\map')
         DNAOneTimeTask.run(self)
-        self.move_mouse_to_safe_position()
+        self.move_mouse_to_safe_position(save_current_pos=False)
         self.set_check_monthly_card()
         _to_do_task = self
         try:

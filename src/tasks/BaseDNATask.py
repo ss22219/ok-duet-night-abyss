@@ -5,7 +5,7 @@ import winsound
 import win32api
 from datetime import datetime, timedelta
 
-from ok import BaseTask, Box, Logger, color_range_to_bound, run_in_new_thread
+from ok import BaseTask, Box, Logger, color_range_to_bound, run_in_new_thread, og
 
 logger = Logger.get_logger(__name__)
 f_black_color = {
@@ -110,9 +110,10 @@ class BaseDNATask(BaseTask):
     def log_info_notify(self, msg):
         self.log_info(msg, notify=self.afk_config['弹出通知'])
 
-    def move_mouse_to_safe_position(self):
-        if self.afk_config["防止鼠标干扰"]:
-            self.old_mouse_pos = win32api.GetCursorPos()
+    def move_mouse_to_safe_position(self, save_current_pos: bool = True):
+        if self.afk_config["防止鼠标干扰"] and self.is_mouse_in_window():
+            if save_current_pos:
+                self.old_mouse_pos = win32api.GetCursorPos()
             abs_pos = self.executor.interaction.capture.get_abs_cords(self.width_of_screen(0.95),
                                                                       self.height_of_screen(0.6))
             win32api.SetCursorPos(abs_pos)
@@ -192,6 +193,21 @@ class BaseDNATask(BaseTask):
             frame = color_filter(self.frame, track_point_color)
         return self.find_one("track_point", threshold=threshold, box=box, template=template, frame=frame,
                              frame_processor=frame_processor, mask_function=mask_function)
+    
+    def is_mouse_in_window(self) -> bool:
+        """
+        检测鼠标是否在游戏窗口范围内。
+
+        Returns:
+            bool: 如果鼠标在窗口内则返回 True，否则返回 False。
+        """
+        mouse_x, mouse_y = win32api.GetCursorPos()
+        hwnd_window = og.device_manager.hwnd_window
+        win_x = hwnd_window.x - (hwnd_window.window_width - hwnd_window.width)
+        win_y = hwnd_window.y - (hwnd_window.window_height - hwnd_window.height)
+
+        return (win_x <= mouse_x < win_x + hwnd_window.window_width) and \
+               (win_y <= mouse_y < win_y + hwnd_window.window_height)
 
 
 track_point_color = {

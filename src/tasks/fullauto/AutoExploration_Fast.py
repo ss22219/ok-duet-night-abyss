@@ -29,7 +29,7 @@ class AutoExploration_Fast(AutoExploration):
 
     def run(self):
         DNAOneTimeTask.run(self)
-        self.move_mouse_to_safe_position()
+        self.move_mouse_to_safe_position(save_current_pos=False)
         self.set_check_monthly_card()
         _to_do_task = self
         try:
