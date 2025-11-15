@@ -75,7 +75,7 @@ class AutoExploration_Fast(AutoExploration):
             self.send_key_up("s")
             self.sleep(0.6)
             self.send_key('f',down_time=0.1,after_sleep=0.8)
-            if self.try_solving_puzzle(False):
+            if not self.try_solving_puzzle(False):
                 return
             self.send_key_down("a")
             self.sleep(0.1)
@@ -114,7 +114,7 @@ class AutoExploration_Fast(AutoExploration):
             self.send_key_up("a")
             self.sleep(0.6)
             self.send_key('f',down_time=0.1,after_sleep=0.8)
-            if self.try_solving_puzzle():
+            if not self.try_solving_puzzle():
                 return
             self.send_key_down("d")
             self.sleep(0.1)
@@ -142,7 +142,7 @@ class AutoExploration_Fast(AutoExploration):
             self.send_key_up("a")
             self.sleep(0.6)
             self.send_key('f',down_time=0.1,after_sleep=0.8)
-            if self.try_solving_puzzle():
+            if not self.try_solving_puzzle():
                 return
             self.send_key('d',down_time=0.8,after_sleep=0.1)
             self.middle_click()
