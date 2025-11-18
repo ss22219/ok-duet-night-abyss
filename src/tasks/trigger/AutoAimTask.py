@@ -35,6 +35,7 @@ OFFSET_BATTLE_MONSTERENTITIES = 0x3D0
 OFFSET_CURRENTLOCATION = 0x914
 OFFSET_CURRENTVELOCITY = 0x920
 OFFSET_EID = 0xAE4
+OFFSET_MODELID = 0x950
 OFFSET_ALREADYDEAD = 0x122B
 OFFSET_OBJTYPE = 0x931
 
@@ -329,6 +330,11 @@ class MemoryReader:
             if obj_type_val != 10:  # 只要 MonsterCharacter
                 continue
             
+            # 读取 ModelId 并过滤友方召唤物
+            model_id = self.read_int32(value_ptr + OFFSET_MODELID)
+            if model_id < 500000 or model_id > 9000000:
+                continue
+            
             location = self.read_vector3(value_ptr + OFFSET_CURRENTLOCATION)
             velocity = self.read_vector3(value_ptr + OFFSET_CURRENTVELOCITY)
             
@@ -341,6 +347,7 @@ class MemoryReader:
             if distance <= max_distance:
                 monsters.append({
                     'eid': eid,
+                    'model_id': model_id,
                     'location': location,
                     'velocity': velocity,
                     'distance': distance,
