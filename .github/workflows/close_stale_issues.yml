@@ -1,0 +1,91 @@
+name: Auto Close Issue
+
+on:
+  issues:
+    types:
+      - opened
+      - edited
+  workflow_dispatch: {}
+
+jobs:
+  check-issue-template:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v6
+        with:
+          script: |
+            const REQUIRED_FIELDS = [
+              {
+                title: "如何复现",
+                templateDefault: "复现该问题的步骤"
+              },
+              {
+                title: "是否必现",
+                templateDefault: "是/否/大概率/小概率"
+              },
+              {
+                title: "ok-dna出现bug的版本",
+                templateDefault: "[如]1.0.1"
+              }
+            ];
+
+            function extractField(body, title) {
+              // 找标题到段落结束
+              const regex = new RegExp(`${title}[\\s\\S]*?(?:\\n\\n|$)`, "i");
+              const match = body.match(regex);
+              if (!match) return "";
+              // 去掉标题，内容保留
+              return match[0].replace(title, "").trim();
+            }
+
+            function isInvalid(content, defaultText) {
+              if (!content) return true;
+
+              // ❗ 改成严格相等检查
+              if (content.trim() === defaultText.trim()) return true;
+
+              return false;
+            }
+
+            async function processIssue(issue) {
+              const body = issue.body || "";
+
+              const missing = REQUIRED_FIELDS.filter(f => {
+                const content = extractField(body, f.title);
+                return isInvalid(content, f.templateDefault);
+              });
+
+              if (missing.length === 0) return;
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body:
+                  "⚠️ Your issue is missing some necessary information. Please add the following fields:\n\n" +
+                  missing.map(m => `- ${m.title}`).join("\n")
+              });
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: "closed"
+              });
+            }
+
+            if (context.eventName === 'issues') {
+              await processIssue(context.payload.issue);
+            } else {
+              for await (const { data: issues } of github.paginate.iterator(github.rest.issues.listForRepo, {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'open',
+              })) {
+                for (const issue of issues) {
+                  if (!issue.pull_request) {
+                    await processIssue(issue);
+                  }
+                }
+              }
+            }
