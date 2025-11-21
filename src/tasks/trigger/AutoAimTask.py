@@ -7,6 +7,8 @@ from pynput import mouse
 import ctypes
 import struct
 import math
+import threading
+import time
 from ctypes import wintypes
 
 logger = Logger.get_logger(__name__)
@@ -249,7 +251,7 @@ class MemoryReader:
             return None
     
     def get_camera_rotation(self):
-        """获取相机旋转 - 从 PlayerController.ControlRotation"""
+        """获取相机旋转 - 从 PlayerCameraManager.CameraCache.POV.Rotation（和 C# 一致）"""
         try:
             game_engine_addr = self.module_base + OFFSET_GAMEENGINE
             game_engine = self.read_int64(game_engine_addr)
@@ -273,8 +275,13 @@ class MemoryReader:
             if not player_controller:
                 return None
             
-            # 直接从 PlayerController.ControlRotation 读取 (偏移 0x308)
-            rotation = self.read_vector3(player_controller + OFFSET_CONTROLROTATION)
+            camera_manager = self.read_int64(player_controller + OFFSET_PLAYERCAMERAMANAGER)
+            if not camera_manager:
+                return None
+            
+            # 读取 CameraCache.POV.Rotation (POV.Location 在 +0x10, POV.Rotation 在 +0x1C)
+            # FRotator 是 3 个 float (Pitch, Yaw, Roll)
+            rotation = self.read_vector3(camera_manager + OFFSET_CAMERACACHEPRIVATE + OFFSET_POV + 0xC)
             return rotation
             
         except Exception as e:
@@ -325,14 +332,17 @@ class MemoryReader:
             if already_dead:
                 continue
             
+            # 读取 ModelId 并过滤友方召唤物（和 C# 一样的过滤逻辑）
+            model_id = self.read_int32(value_ptr + OFFSET_MODELID)
+            
+            # 过滤友方召唤物（基于 ModelId）
+            # 210101 = 友方召唤物, 210199 = PhantomCharacter
+            if model_id < 500000 or model_id > 9000000:
+                continue
+            
             obj_type = self.read_bytes(value_ptr + OFFSET_OBJTYPE, 1)
             obj_type_val = obj_type[0] if obj_type else 0
             if obj_type_val != 10:  # 只要 MonsterCharacter
-                continue
-            
-            # 读取 ModelId 并过滤友方召唤物
-            model_id = self.read_int32(value_ptr + OFFSET_MODELID)
-            if model_id < 500000 or model_id > 9000000:
                 continue
             
             location = self.read_vector3(value_ptr + OFFSET_CURRENTLOCATION)
@@ -399,6 +409,8 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
         self.is_down = False
         self.memory_reader = None
         self.last_target = None
+        self.aim_thread = None
+        self.aim_thread_running = False
 
     def disable(self):
         """禁用任务时，断开信号连接。"""
@@ -437,6 +449,7 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
     
     def stop_memory_reader(self):
         """停止内存读取器"""
+        self.stop_aim_thread()
         if self.memory_reader is not None:
             try:
                 self.memory_reader.detach()
@@ -447,25 +460,75 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
                 self.memory_reader = None
                 self.last_target = None
     
-    def aim_at_nearest_monster(self):
-        """瞄准最近的怪物"""
+    def start_aim_thread(self):
+        """启动瞄准线程"""
+        if self.aim_thread is not None and self.aim_thread.is_alive():
+            return
+        
+        self.aim_thread_running = True
+        self.aim_thread = threading.Thread(target=self._aim_loop, daemon=True)
+        self.aim_thread.start()
+        logger.info("瞄准线程已启动")
+    
+    def stop_aim_thread(self):
+        """停止瞄准线程"""
+        if self.aim_thread is not None:
+            self.aim_thread_running = False
+            if self.aim_thread.is_alive():
+                self.aim_thread.join(timeout=1.0)
+            self.aim_thread = None
+            logger.info("瞄准线程已停止")
+    
+    def _aim_loop(self):
+        """瞄准线程主循环 - 模仿 C# 版本的高频更新"""
+        last_scan_time = 0
+        scan_interval = 0.1  # 100ms 扫描一次目标
+        aim_interval = 0.01  # 10ms 更新一次瞄准（和 C# 一样）
+        current_target = None
+        
+        while self.aim_thread_running:
+            try:
+                if not self.manual_activate or not self.is_down:
+                    time.sleep(0.05)
+                    current_target = None
+                    continue
+                
+                current_time = time.time()
+                
+                # 定期重新扫描目标（100ms 间隔）
+                if current_time - last_scan_time >= scan_interval or current_target is None:
+                    max_distance = float(self.config.get("瞄准距离", 100.0)) * 100
+                    monsters = self.memory_reader.scan_monsters(max_distance)
+                    
+                    if monsters:
+                        new_target = monsters[0]
+                        if current_target is None or current_target['eid'] != new_target['eid']:
+                            current_target = new_target
+                            logger.info(f"锁定目标: EID={current_target['eid']}, ModelID={current_target['model_id']}, 距离={current_target['distance']/100:.1f}m")
+                    else:
+                        if current_target is not None:
+                            logger.info("目标丢失")
+                        current_target = None
+                    
+                    last_scan_time = current_time
+                
+                # 持续瞄准当前目标（10ms 更新）
+                if current_target is not None:
+                    self._aim_at_target(current_target)
+                
+                time.sleep(aim_interval)
+                
+            except Exception as e:
+                logger.error(f"瞄准线程异常: {e}")
+                time.sleep(0.1)
+                current_target = None
+    
+    def _aim_at_target(self, target):
+        """瞄准指定目标（不扫描，只瞄准）"""
         if not self.memory_reader:
             return False
         
         try:
-            # 扫描怪物
-            max_distance = float(self.config.get("瞄准距离", 100.0)) * 100  # 米转厘米
-            monsters = self.memory_reader.scan_monsters(max_distance)
-            
-            if not monsters:
-                return False
-            
-            # 获取最近的怪物
-            target = monsters[0]
-            self.last_target = target
-            
-            logger.info(f"  [Python] 怪物: ID={target['eid']}, 位置=({target['location'][0]:.1f}, {target['location'][1]:.1f}, {target['location'][2]:.1f}), 距离={target['distance']/100:.1f}m")
-            
             # 获取相机信息
             camera_pos = self.memory_reader.get_camera_location()
             camera_rot = self.memory_reader.get_camera_rotation()
@@ -478,8 +541,6 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
                 camera_pos = self.memory_reader.get_player_location()
                 if not camera_pos:
                     return False
-            
-            logger.info(f"  [Python] 相机: 位置=({camera_pos[0]:.1f}, {camera_pos[1]:.1f}, {camera_pos[2]:.1f})")
             
             # 预测目标位置
             prediction_time = float(self.config.get("预测时间", 0.15))
@@ -494,56 +555,56 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
             dy = target_pos[1] - camera_pos[1]
             dz = target_pos[2] - camera_pos[2]
             
-            # 计算需要的旋转角度
+            # 计算需要的旋转角度（和 C# 完全一致）
             distance_2d = math.sqrt(dx*dx + dy*dy)
             target_yaw = math.degrees(math.atan2(dy, dx))
-            target_pitch = -math.degrees(math.atan2(dz, distance_2d))
+            target_pitch = math.degrees(math.atan2(dz, distance_2d))  # 不要负号
             
             # 计算角度差
             current_yaw = camera_rot[1]
             current_pitch = camera_rot[0]
             
+            # 标准化 Pitch 角度（和 C# 的 NormalizePitch 一致）
             # 将 Pitch 从 0-360° 转换为 -180° 到 180°
-            if current_pitch > 180:
+            while current_pitch > 180:
                 current_pitch -= 360
-            
-            logger.info(f"  [Python] 当前: Pitch={current_pitch:.2f}°, Yaw={current_yaw:.2f}°")
-            logger.info(f"  [Python] 目标: Pitch={target_pitch:.2f}°, Yaw={target_yaw:.2f}°")
-            
-            delta_yaw = target_yaw - current_yaw
-            delta_pitch = target_pitch - current_pitch
-            
-            logger.info(f"  [Python] 角度差: Yaw={delta_yaw:.2f}°, Pitch={delta_pitch:.2f}°")
+            while current_pitch < -180:
+                current_pitch += 360
             
             # 归一化角度到 [-180, 180]
-            while delta_yaw > 180:
-                delta_yaw -= 360
-            while delta_yaw < -180:
-                delta_yaw += 360
+            def normalize_angle(angle):
+                while angle > 180:
+                    angle -= 360
+                while angle < -180:
+                    angle += 360
+                return angle
             
-            # 添加角度偏移补偿
-            # delta_yaw 不需要偏移，已通过位置补偿 X 处理
-            delta_pitch += 10  # 向上偏移（负值 = 向上）
+            current_yaw = normalize_angle(current_yaw)
+            target_yaw = normalize_angle(target_yaw)
             
-            # 转换为鼠标移动（和 C# 版本相同的计算）
+            delta_yaw = normalize_angle(target_yaw - current_yaw)
+            delta_pitch = target_pitch - current_pitch
+            
+            # 如果误差很小，不需要调整
+            if abs(delta_yaw) < 0.5 and abs(delta_pitch) < 0.5:
+                return True
+            
+            # 转换为鼠标移动（和 C# 完全一致）
             sensitivity = float(self.config.get("鼠标灵敏度", 0.2))
-            pixels_per_degree = 1.0 / sensitivity  # 1 / 0.2 = 5
+            pixels_per_degree = 1.0 / sensitivity
             
             mouse_dx = int(delta_yaw * pixels_per_degree)
             mouse_dy = int(-delta_pitch * pixels_per_degree)  # Pitch 是负的
             
-            # 限制单次移动量，避免过大跳动
+            # 限制单次移动量
             max_move = 50
             if abs(mouse_dx) > max_move:
                 mouse_dx = max_move if mouse_dx > 0 else -max_move
             if abs(mouse_dy) > max_move:
                 mouse_dy = max_move if mouse_dy > 0 else -max_move
             
-            # 移动鼠标（使用 SendInput，和 C# 版本一样）
+            # 移动鼠标
             if abs(mouse_dx) > 1 or abs(mouse_dy) > 1:
-                import ctypes
-                from ctypes import wintypes
-                
                 # 定义 INPUT 结构
                 class MOUSEINPUT(ctypes.Structure):
                     _fields_ = [
@@ -612,21 +673,8 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
         try:
             self.mouse_down(key="right")
             self.is_down = True
-            
-            # 如果启用了内存瞄准，在蓄力期间持续瞄准
-            if self.config.get("启用内存瞄准", "关闭") == "开启":
-                charge_time = self.config.get('按下时间', 0.50)
-                aim_interval = 0.05  # 每 50ms 瞄准一次
-                elapsed = 0.0
-                
-                while elapsed < charge_time:
-                    self.aim_at_nearest_monster()
-                    sleep_time = min(aim_interval, charge_time - elapsed)
-                    self.sleep_check(sleep_time, False)
-                    elapsed += sleep_time
-            else:
-                self.sleep_check(self.config.get('按下时间', 0.50), False)
-                
+            # 瞄准线程会自动在后台持续瞄准
+            self.sleep_check(self.config.get('按下时间', 0.50), False)
         finally:
             if self.is_down:
                 self.mouse_up(key="right")
@@ -656,12 +704,13 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
         self.manual_activate = not self.manual_activate
         if self.manual_activate:
             logger.info("激活自动蓄力瞄准")
-            # 如果启用了内存瞄准，启动内存读取器
+            # 如果启用了内存瞄准，启动内存读取器和瞄准线程
             if self.config.get("启用内存瞄准", "关闭") == "开启":
                 self.start_memory_reader()
+                self.start_aim_thread()
         else:
             logger.info("关闭自动蓄力瞄准")
-            # 停止内存读取器
+            # 停止内存读取器和瞄准线程
             self.stop_memory_reader()
 
     def on_global_click(self, x, y, button, pressed):
