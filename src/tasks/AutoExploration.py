@@ -99,14 +99,14 @@ class AutoExploration(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
 
     def init_all(self):
         self.init_for_next_round()
-        self.current_round = -1
+        self.skill_tick.reset()
+        self.current_round = 0
 
     def init_for_next_round(self):
         self.init_runtime_state()
 
     def init_runtime_state(self):
         self.runtime_state = {"start_time": 0, "wait_next_round": False}
-        self.skill_tick.reset()
 
     def handle_in_mission(self):
         if self.find_serum():
@@ -135,8 +135,8 @@ class AutoExploration(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         if self.external_movement is not _default_movement:
             self.log_info("任务开始")
             self.external_movement()
-            self.log_info(f"外部移动执行完毕，等待战斗开始，{DEFAULT_ACTION_TIMEOUT}秒后超时")
-            if not self.wait_until(self.find_serum, time_out=DEFAULT_ACTION_TIMEOUT):
+            self.log_info(f"外部移动执行完毕，等待战斗开始，{DEFAULT_ACTION_TIMEOUT+10}秒后超时")
+            if not self.wait_until(self.find_serum, time_out=DEFAULT_ACTION_TIMEOUT+10):
                 self.log_info("超时重开")
                 self.open_in_mission_menu()
             else:

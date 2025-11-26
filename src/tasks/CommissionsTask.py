@@ -17,7 +17,7 @@ class CommissionsTask(BaseDNATask):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.current_round = -1
+        self.current_round = 0
         self.current_wave = -1
         self.mission_status = None
         self.action_timeout = 10
@@ -27,20 +27,22 @@ class CommissionsTask(BaseDNATask):
         self.default_config.update({
             '超时时间': 120,
             "委托手册": "不使用",
+            "委托手册指定轮次": "",
             "使用技能": "不使用",
             "技能释放频率": 5.0,
             "启用自动穿引共鸣": True,
             "发出声音提醒": True,
             "自动选择首个密函和密函奖励": True,
-            "优先选择持有数为0的密函奖励": False,
+            "优先选择密函奖励": "不使用",
         })
         self.config_description.update({
+            "委托手册指定轮次": "范例: 3,5,8",
             "超时时间": "超时后将重启任务",
             "技能释放频率": "毎几秒释放一次技能",
             "启用自动穿引共鸣": "在需要跑图时时启用触发任务的自动穿引共鸣",
             "发出声音提醒": "在需要时发出声音提醒",
             "自动选择首个密函和密函奖励": "刷武器密函时推荐同时开启下一选项",
-            "优先选择持有数为0的密函奖励": "在上一选项启用时生效，多个目标时选择靠左的",
+            "优先选择密函奖励": "在上一选项启用时生效",
         })
         self.config_type["委托手册"] = {
             "type": "drop_down",
@@ -50,9 +52,15 @@ class CommissionsTask(BaseDNATask):
             "type": "drop_down",
             "options": ["不使用", "战技", "终结技", "魔灵支援"],
         }
+        self.config_type["优先选择密函奖励"] = {
+            "type": "drop_down",
+            "options": ["不使用", "持有数为0", "持有数最少", "持有数最多"],
+        }
 
-    def find_quit_btn(self, threshold=0):
-        return self.find_one("ingame_quit_icon", threshold=threshold)
+    def find_quit_btn(self, threshold=0, box=None):
+        if box is None:
+            box = self.box_of_screen_scaled(2560, 1440, 729, 960, 854, 1025, name="quit_mission", hcenter=True)
+        return self.find_one("ingame_quit_icon", threshold=threshold, box=box)
 
     def find_continue_btn(self, threshold=0, box=None):
         if box is None:
@@ -60,29 +68,29 @@ class CommissionsTask(BaseDNATask):
         return self.find_one("ingame_continue_icon", threshold=threshold, box=box)
 
     def find_bottom_start_btn(self, threshold=0):
-        return self.find_start_btn(threshold=threshold,
-                                   box=self.box_of_screen_scaled(2560, 1440, 2094, 1262, 2153, 1328,
-                                                                 name="start_mission", hcenter=True))
+        return self.find_start_btn(
+            threshold=threshold, box=self.box_of_screen_scaled(2560, 1440, 2094, 1262, 2153, 1328, name="start_mission",
+                                                               hcenter=True))
 
     def find_big_bottom_start_btn(self, threshold=0):
-        return self.find_start_btn(threshold=threshold,
-                                   box=self.box_of_screen_scaled(2560, 1440, 1667, 1259, 1728, 1328,
-                                                                 name="start_mission", hcenter=True))
+        return self.find_start_btn(
+            threshold=threshold, box=self.box_of_screen_scaled(2560, 1440, 1667, 1259, 1728, 1328, name="start_mission",
+                                                               hcenter=True))
 
     def find_letter_btn(self, threshold=0):
-        return self.find_start_btn(threshold=threshold,
-                                   box=self.box_of_screen_scaled(2560, 1440, 1630, 852, 1884, 920, name="letter_btn",
-                                                                 hcenter=True))
+        return self.find_start_btn(
+            threshold=threshold, box=self.box_of_screen_scaled(2560, 1440, 1630, 852, 1884, 920, name="letter_btn",
+                                                               hcenter=True))
 
     def find_letter_reward_btn(self, threshold=0):
-        return self.find_start_btn(threshold=threshold,
-                                   box=self.box_of_screen_scaled(2560, 1440, 1071, 1160, 1120, 1230,
-                                                                 name="letter_reward_btn", hcenter=True))
+        return self.find_start_btn(
+            threshold=threshold, box=self.box_of_screen_scaled(2560, 1440, 1071, 1160, 1120, 1230,
+                                                               name="letter_reward_btn", hcenter=True))
 
     def find_drop_rate_btn(self, threshold=0):
-        return self.find_start_btn(threshold=threshold, box=self.box_of_screen_scaled(2560, 1440, 1060, 935, 1420, 1000,
-                                                                                      name="drop_rate_btn",
-                                                                                      hcenter=True))
+        return self.find_start_btn(
+            threshold=threshold, box=self.box_of_screen_scaled(2560, 1440, 1060, 935, 1420, 1000, name="drop_rate_btn",
+                                                               hcenter=True))
 
     def find_esc_menu(self, threshold=0):
         return self.find_one("quit_big_icon", threshold=threshold)
@@ -94,9 +102,7 @@ class CommissionsTask(BaseDNATask):
         start = time.time()
         while time.time() - start < time_out:
             self.send_key("esc")
-            if self.wait_until(
-                    self.find_esc_menu, time_out=2, raise_if_not_found=False
-            ):
+            if self.wait_until(self.find_esc_menu, time_out=2, raise_if_not_found=False):
                 found = True
                 break
         else:
@@ -107,7 +113,7 @@ class CommissionsTask(BaseDNATask):
 
     def start_mission(self, timeout=0):
         action_timeout = self.action_timeout if timeout == 0 else timeout
-        box = self.box_of_screen_scaled(2560, 1440, 60, 1029, 1582, 1332, name="reward_drag_area", hcenter=True)
+        box = self.box_of_screen_scaled(2560, 1440, 60, 1029, 2056, 1332, name="reward_drag_area", hcenter=True)
         start_time = time.time()
         while time.time() - start_time < action_timeout:
             if btn := self.find_retry_btn() or self.find_bottom_start_btn() or self.find_big_bottom_start_btn():
@@ -139,27 +145,28 @@ class CommissionsTask(BaseDNATask):
         self.wait_until(lambda: not self.in_team(), time_out=action_timeout, raise_if_not_found=True)
 
     def give_up_mission(self, timeout=0):
+        def is_mission_start_iface():
+            return self.find_retry_btn() or self.find_bottom_start_btn() or self.find_big_bottom_start_btn()
+
         action_timeout = self.action_timeout if timeout == 0 else timeout
         box = self.box_of_screen_scaled(2560, 1440, 1301, 776, 1365, 841, name="give_up_mission", hcenter=True)
-        self.open_in_mission_menu()
 
-        self.wait_until(
-            condition=lambda: self.find_start_btn(box=box),
-            post_action=lambda: self.click_relative(0.95, 0.91, after_sleep=0.25),
-            time_out=action_timeout,
-            raise_if_not_found=True,
-        )
-        self.sleep(0.5)
-        self.wait_until(
-            condition=lambda: not self.find_start_btn(box=box),
-            post_action=lambda: self.click_box(self.find_start_btn(box=box), after_sleep=0.25),
-            time_out=action_timeout,
-            raise_if_not_found=True,
-        )
-        self.wait_until(
-            condition=lambda: self.find_retry_btn() or self.find_bottom_start_btn() or self.find_big_bottom_start_btn(),
-            time_out=action_timeout,
-        )
+        if self.open_in_mission_menu(time_out=10, raise_if_not_found=False):
+            self.wait_until(
+                condition=lambda: self.find_start_btn(box=box),
+                post_action=lambda: self.click_relative(0.95, 0.91, after_sleep=0.25),
+                time_out=action_timeout,
+                raise_if_not_found=True,
+            )
+            self.sleep(0.5)
+            self.wait_until(
+                condition=lambda: not self.find_start_btn(box=box),
+                post_action=lambda: self.click_box(self.find_start_btn(box=box), after_sleep=0.25),
+                time_out=action_timeout,
+                raise_if_not_found=True,
+            )
+
+        self.wait_until(condition=is_mission_start_iface, time_out=60, raise_if_not_found=True)
 
     def continue_mission(self, timeout=0):
         if self.in_team():
@@ -176,12 +183,15 @@ class CommissionsTask(BaseDNATask):
         return True
 
     def choose_drop_rate(self, timeout=0):
+        def click_drop_rate_btn():
+            if (box:=self.find_drop_rate_btn()):
+                self.click_box(box, after_sleep=0.25)
         action_timeout = self.action_timeout if timeout == 0 else timeout
         self.sleep(0.5)
         self.choose_drop_rate_item()
         self.wait_until(
             condition=lambda: not self.find_drop_item() and not self.find_drop_item(800),
-            post_action=lambda: self.click_box(self.find_drop_rate_btn(), after_sleep=0.25),
+            post_action=click_drop_rate_btn,
             time_out=action_timeout,
             raise_if_not_found=True,
         )
@@ -192,7 +202,14 @@ class CommissionsTask(BaseDNATask):
         drop_rate = self.config.get("委托手册", "不使用")
         if drop_rate == "不使用":
             return
-        elif drop_rate == "100%":
+        round_to_use = [int(num) for num in re.findall(r'\d+', self.config.get("委托手册指定轮次", ""))]
+        if len(round_to_use) != 0:
+            if self.mission_status != Mission.CONTINUE:
+                if 1 not in round_to_use:
+                    return
+            elif self.current_round == 0 or (self.current_round + 1) not in round_to_use:
+                return
+        if drop_rate == "100%":
             self.click_relative(0.40, 0.56)
         elif drop_rate == "200%":
             self.click_relative(0.50, 0.56)
@@ -235,30 +252,76 @@ class CommissionsTask(BaseDNATask):
                 raise_if_not_found=True,
             )
 
-    def choose_letter_reward_zero(self):
-        self.wait_until(
-            condition=lambda: self.find_next_hint(0.60, 0.64, 0.67, 0.67, r'[:：]')
-                              and self.find_next_hint(0.33, 0.64, 0.40, 0.67, r'[:：]'),
-            time_out=4)
-        if self.find_next_hint(0.33, 0.64, 0.40, 0.67, r'[:：]0'):
-            self.log_info_notify("选择第一个奖励")
-            self.click(0.36, 0.66, after_sleep=0.5)
-        elif self.find_next_hint(0.47, 0.64, 0.53, 0.67, r'[:：]0'):
-            self.log_info_notify("选择第二个奖励")
-            self.click(0.50, 0.66, after_sleep=0.5)
-        elif self.find_next_hint(0.60, 0.64, 0.67, 0.67, r'[:：]0'):
-            self.log_info_notify("选择第三个奖励")
-            self.click(0.63, 0.66, after_sleep=0.5)
+    def choose_target_letter_reward(self):
+        reward_pattern = re.compile(r'[:：]\s*([0-9]+)')
+        def get_rewards():
+            box = self.box_of_screen(0.328, 0.643, 0.678, 0.672, hcenter=True, name="letter_reward")
+            return self.ocr(box=box, match=reward_pattern)
+        
+        start = time.time()
+        while time.time() - start < 10:
+            rewards = get_rewards()
+            if len(rewards) == 3:
+                break
+            self.sleep(0.1)
         else:
-            self.log_info("未识别到持有数为0的奖励")
+            self.log_info("超时：未识别到3个奖励选项，使用默认奖励")
+            return
+
+        self.sleep(0.3)
+        rewards = get_rewards()
+
+        if len(rewards) != 3:
+            self.log_info(f"异常：稳定后识别数量不符 (识别到 {len(rewards)} 个)，使用默认奖励")
+            return
+
+        rewards.sort(key=lambda reward: reward.x)
+
+        parsed_items = []
+        for idx, reward in enumerate(rewards):
+            match = reward_pattern.search(reward.name)
+            if not match:
+                self.log_info(f"第 {idx + 1} 个奖励数量识别失败，使用默认奖励")
+                return
+            count = int(match.group(1))
+            parsed_items.append({
+                'index': idx + 1,
+                'count': count,
+                'reward_obj': reward,
+                'name': reward.name
+            })
+
+        strategy = self.config.get("优先选择密函奖励")
+        target_item = None
+
+        self.log_info(f"当前识别到的奖励持有数: {[item['count'] for item in parsed_items]}")
+
+        if strategy == "持有数为0":
+            for item in parsed_items:
+                if item['count'] == 0:
+                    target_item = item
+                    break
+            if not target_item:
+                self.log_info("未识别到持有数为0的奖励，使用默认奖励")
+                return
+
+        elif strategy == "持有数最少":
+            target_item = min(parsed_items, key=lambda x: x['count'])
+
+        elif strategy == "持有数最多":
+            target_item = max(parsed_items, key=lambda x: x['count'])
+
+        if target_item:
+            self.log_info(f"策略[{strategy}] -> 选择第 {target_item['index']} 个奖励，持有数: {target_item['count']}")
+            self.click_box(target_item['reward_obj'], down_time=0.02, after_sleep=0.5)
 
     def choose_letter_reward(self, timeout=0):
         if not hasattr(self, "config"):
             return
         action_timeout = self.action_timeout if timeout == 0 else timeout
         if self.config.get("自动选择首个密函和密函奖励", False):
-            if self.config.get("优先选择持有数为0的密函奖励", False):
-                self.choose_letter_reward_zero()
+            if self.config.get("优先选择密函奖励", "不使用") != "不使用":
+                self.choose_target_letter_reward()
             self.wait_until(
                 condition=lambda: not self.find_letter_reward_btn(),
                 post_action=lambda: self.click(0.50, 0.83, after_sleep=0.25),
@@ -278,9 +341,7 @@ class CommissionsTask(BaseDNATask):
     def use_skill(self, skill_time):
         if not hasattr(self, "config"):
             return
-        if self.config.get(
-                "使用技能", "不使用"
-        ) != "不使用" and time.time() - skill_time >= self.config.get("技能释放频率", 5):
+        if self.config.get("使用技能", "不使用") != "不使用" and time.time() - skill_time >= self.config.get("技能释放频率", 5):
             skill_time = time.time()
             if self.config.get("使用技能") == "战技":
                 self.get_current_char().send_combat_key()
@@ -291,6 +352,7 @@ class CommissionsTask(BaseDNATask):
         return skill_time
 
     def create_skill_ticker(self):
+
         def action():
             if self.config.get("使用技能", "不使用") == "不使用":
                 return
@@ -319,7 +381,7 @@ class CommissionsTask(BaseDNATask):
 
         if new_round_from_ocr is not None:
             self.current_round = new_round_from_ocr
-        elif self.current_round != -1:  # OCR失败，但之前已有轮次记录，则递增
+        elif self.current_round != 0:  # OCR失败，但之前已有轮次记录，则递增
             self.current_round += 1
 
         if prev_round != self.current_round:
@@ -339,10 +401,13 @@ class CommissionsTask(BaseDNATask):
                     return
                 if prev_wave != self.current_wave:
                     self.info_set("当前波次", self.current_wave)
+            return
         if self.wave_future is None:
             mission_info_box = self.box_of_screen_scaled(2560, 1440, 275, 372, 445, 470, name="mission_info",
                                                          hcenter=True)
-            self.wave_future = self.thread_pool_executor.submit(self.ocr, box=mission_info_box,
+            frame = self.frame.copy()
+            self.wave_future = self.thread_pool_executor.submit(self.ocr, frame=frame,
+                                                                box=mission_info_box,
                                                                 frame_processor=isolate_white_text_to_black,
                                                                 match=re.compile(r"\d/\d"))
 
@@ -366,27 +431,34 @@ class CommissionsTask(BaseDNATask):
         self.check_for_monthly_card()
 
         if self.find_letter_reward_btn():
+            self.log_info("处理任务界面: 选择密函奖励")
             self.choose_letter_reward()
             return
 
         if self.find_letter_interface():
+            self.log_info("处理任务界面: 选择密函")
             self.choose_letter()
             return self.get_return_status()
         elif self.find_drop_item() or self.find_drop_item(800):
+            self.log_info("处理任务界面: 选择委托手册")
             self.choose_drop_rate()
             return self.get_return_status()
 
         if self.find_retry_btn() or self.find_bottom_start_btn() or self.find_big_bottom_start_btn():
+            self.log_info("处理任务界面: 开始任务")
             self.start_mission()
             self.mission_status = Mission.START
             return
         elif self.find_continue_btn():
             if stop_func():
+                self.log_info("处理任务界面: 终止任务")
                 return Mission.STOP
+            self.log_info("处理任务界面: 继续任务")
             self.continue_mission()
             self.mission_status = Mission.CONTINUE
             return
         elif self.find_esc_menu():
+            self.log_info("处理任务界面: 放弃任务")
             self.give_up_mission()
             return Mission.GIVE_UP
         return False
@@ -402,8 +474,8 @@ class CommissionsTask(BaseDNATask):
             target_height=540,
             name=box_name,
         )
-        fps_text = find_boxes_by_name(texts, re.compile(s, re.IGNORECASE))
-        if fps_text:
+        target_text = find_boxes_by_name(texts, re.compile(s, re.IGNORECASE))
+        if target_text:
             return True
 
     def reset_and_transport(self):
@@ -445,6 +517,7 @@ class CommissionsTask(BaseDNATask):
 
 
 class QuickMoveTask:
+
     def __init__(self, owner: "CommissionsTask"):
         self._owner = owner
         self._move_task = None

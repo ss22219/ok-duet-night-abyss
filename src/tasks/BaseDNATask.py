@@ -1,9 +1,10 @@
 import time
-from typing import Union, Callable
+from typing import Protocol, Callable, Union
 import numpy as np
 import cv2
 import winsound
 import win32api
+import win32con
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 
@@ -16,6 +17,51 @@ f_black_color = {
     'b': (0, 20)  # Blue range
 }
 
+class Ticker(Protocol):
+    """
+    技能循环计时器接口。
+    
+    这是一个可调用的对象（类似函数），用于控制动作的执行频率，
+    并提供了额外的方法来手动干预计时器的状态。
+    """
+    
+    def __call__(self) -> None:
+        """
+        尝试执行动作（Tick）。
+        
+        如果距离上次执行的时间超过了设定的间隔（Interval），
+        则执行绑定的 Action，并更新最后执行时间。
+        """
+        ...
+
+    def reset(self) -> None:
+        """
+        重置计时器状态。
+        
+        将“上次执行时间”归零。这意味着下一次调用 tick() 时，
+        几乎肯定会立即触发动作（视为初次运行）。
+        """
+        ...
+
+    def touch(self) -> None:
+        """
+        刷新计时器（将最后执行时间设为当前时间）。
+        
+        用于“欺骗”计时器刚刚执行过动作。
+        效果：强制动作进入冷却，直到经过一个完整的 interval 周期。
+        """
+        ...
+
+    def start_next_tick(self) -> None:
+        """
+        重置下一帧的计时起点（同步延迟）。
+        
+        标记计时器。下一次调用 tick() 时，不会检查间隔，也不会执行动作，
+        而是直接将“上次执行时间”对齐到那一刻的时间。
+        
+        用途：通常用于在手动释放技能后，告诉计时器从下一帧开始重新倒计时。
+        """
+        ...
 
 class BaseDNATask(BaseTask):
 
@@ -184,16 +230,22 @@ class BaseDNATask(BaseTask):
             logger.info('set next monthly card start time to {}'.format(next_monthly_card_start_date_time))
         else:
             self.next_monthly_card_start = 0
+            logger.info('set next monthly card start to {}'.format(self.next_monthly_card_start))
 
     def handle_monthly_card(self):
         monthly_card = self.find_one('monthly_card', threshold=0.8)
-        # self.screenshot('monthly_card1')
+        if not hasattr(self, '_last_monthly_card_check_time'):
+            self._last_monthly_card_check_time = 0
+        now = time.time()
+        if now - self._last_monthly_card_check_time >= 10:
+            self._last_monthly_card_check_time = now
+            self.screenshot('monthly_card1')
         ret = monthly_card is not None
         if ret:
             self.wait_until(self.in_team, time_out=10,
                             post_action=lambda: self.click_relative(0.50, 0.89, after_sleep=1))
             self.set_check_monthly_card(next_day=True)
-        logger.debug(f'check_monthly_card {monthly_card}')
+        logger.info(f'check_monthly_card {monthly_card}, ret {ret}')
         return ret
 
     def find_track_point(self, threshold: float = 0, box: Box | None = None, template=None, frame_processor=None,
@@ -262,7 +314,7 @@ class BaseDNATask(BaseTask):
         win32api.SetCursorPos(abs_pos)
         return True
 
-    def create_ticker(self, action: Callable, interval: Union[float, int, Callable] = 1.0) -> Callable:
+    def create_ticker(self, action: Callable, interval: Union[float, int, Callable] = 1.0) -> Ticker:
         last_time = 0
         armed = False
 
@@ -328,6 +380,13 @@ class BaseDNATask(BaseTask):
             str: 螺旋飞跃的按键字符串。
         """
         return self.key_config['HelixLeap Key']
+    
+    def try_bring_to_front(self):
+        if not self.hwnd.is_foreground():
+            win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
+            win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
+            self.hwnd.bring_to_front()
+            self.sleep(0.5)
 
 track_point_color = {
     "r": (121, 255),  # Red range
