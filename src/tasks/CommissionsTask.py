@@ -28,8 +28,19 @@ class CommissionsTask(BaseDNATask):
             '超时时间': 120,
             "委托手册": "不使用",
             "委托手册指定轮次": "",
-            "使用技能": "不使用",
-            "技能释放频率": 5.0,
+            # 技能配置（简化）
+            "技能释放策略": "不使用",
+            "终结技间隔(秒)": 15.0,
+            "战技间隔(秒)": 3.0,
+            "魔灵支援间隔(秒)": 10.0,
+            # 自动瞄准配置
+            "启用自动瞄准射击": "关闭",
+            "瞄准距离(米)": 100.0,
+            "鼠标灵敏度": 0.2,
+            "预测时间(秒)": 0.15,
+            "射击按下时间(秒)": 0.5,
+            "射击后摇时间(秒)": 0.3,
+            # 其他配置
             "启用自动穿引共鸣": True,
             "发出声音提醒": True,
             "自动选择首个密函和密函奖励": True,
@@ -38,7 +49,19 @@ class CommissionsTask(BaseDNATask):
         self.config_description.update({
             "委托手册指定轮次": "范例: 3,5,8",
             "超时时间": "超时后将重启任务",
-            "技能释放频率": "毎几秒释放一次技能",
+            # 技能说明
+            "技能释放策略": "选择要使用的技能组合",
+            "终结技间隔(秒)": "终结技每隔几秒释放一次",
+            "战技间隔(秒)": "战技每隔几秒释放一次",
+            "魔灵支援间隔(秒)": "魔灵支援每隔几秒释放一次",
+            # 自动瞄准说明
+            "启用自动瞄准射击": "自动瞄准最近怪物并射击（首次启动自动查找偏移）",
+            "瞄准距离(米)": "只瞄准这个距离内的怪物",
+            "鼠标灵敏度": "调整瞄准速度，越小越慢越精确",
+            "预测时间(秒)": "预判移动目标的位置",
+            "射击按下时间(秒)": "右键蓄力时间",
+            "射击后摇时间(秒)": "射击后等待时间",
+            # 其他说明
             "启用自动穿引共鸣": "在需要跑图时时启用触发任务的自动穿引共鸣",
             "发出声音提醒": "在需要时发出声音提醒",
             "自动选择首个密函和密函奖励": "刷武器密函时推荐同时开启下一选项",
@@ -48,14 +71,39 @@ class CommissionsTask(BaseDNATask):
             "type": "drop_down",
             "options": ["不使用", "100%", "200%", "800%", "2000%"],
         }
-        self.config_type["使用技能"] = {
+        self.config_type["技能释放策略"] = {
             "type": "drop_down",
-            "options": ["不使用", "战技", "终结技", "魔灵支援"],
+            "options": [
+                "不使用",
+                "只用战技",
+                "只用终结技",
+                "只用魔灵支援",
+                "终结技+战技",
+                "终结技+魔灵",
+                "战技+魔灵",
+                "全部技能"
+            ],
+        }
+        self.config_type["启用自动瞄准射击"] = {
+            "type": "drop_down",
+            "options": ["关闭", "开启"],
         }
         self.config_type["优先选择密函奖励"] = {
             "type": "drop_down",
             "options": ["不使用", "持有数为0", "持有数最少", "持有数最多"],
         }
+        
+        # 初始化技能计时器
+        self.skill_timers = {
+            "ultimate": 0,  # 终结技
+            "combat": 0,    # 战技
+            "geniemon": 0,  # 魔灵支援
+        }
+        
+        # 初始化自动瞄准相关
+        self.memory_reader = None
+        self.aim_enabled = False
+        self.last_aim_time = 0
 
     def find_quit_btn(self, threshold=0, box=None):
         if box is None:
@@ -339,31 +387,474 @@ class CommissionsTask(BaseDNATask):
         self.sleep(3)
 
     def use_skill(self, skill_time):
+        """
+        使用技能（支持单一技能和组合模式）
+        
+        Args:
+            skill_time: 旧版单一技能的计时器（保持兼容性）
+            
+        Returns:
+            更新后的 skill_time
+        """
         if not hasattr(self, "config"):
-            return
-        if self.config.get("使用技能", "不使用") != "不使用" and time.time() - skill_time >= self.config.get("技能释放频率", 5):
-            skill_time = time.time()
-            if self.config.get("使用技能") == "战技":
+            return skill_time
+        
+        # 初始化技能计时器（如果不存在）
+        if not hasattr(self, "skill_timers"):
+            self.skill_timers = {
+                "ultimate": 0,
+                "combat": 0,
+                "geniemon": 0,
+            }
+        
+        strategy = self.config.get("技能释放策略", "不使用")
+        current_time = time.time()
+        
+        # 不使用技能
+        if strategy == "不使用":
+            return skill_time
+        
+        # 获取技能间隔配置
+        ultimate_interval = self.config.get("终结技间隔(秒)", 15.0)
+        combat_interval = self.config.get("战技间隔(秒)", 3.0)
+        geniemon_interval = self.config.get("魔灵支援间隔(秒)", 10.0)
+        
+        # 只用战技
+        if strategy == "只用战技":
+            if current_time - self.skill_timers["combat"] >= combat_interval:
                 self.get_current_char().send_combat_key()
-            elif self.config.get("使用技能") == "终结技":
+                self.skill_timers["combat"] = current_time
+        
+        # 只用终结技
+        elif strategy == "只用终结技":
+            if current_time - self.skill_timers["ultimate"] >= ultimate_interval:
                 self.get_current_char().send_ultimate_key()
-            elif self.config.get("使用技能") == "魔灵支援":
+                self.skill_timers["ultimate"] = current_time
+                self.log_info(f"释放终结技（下次: {ultimate_interval}秒后）")
+        
+        # 只用魔灵支援
+        elif strategy == "只用魔灵支援":
+            if current_time - self.skill_timers["geniemon"] >= geniemon_interval:
                 self.get_current_char().send_geniemon_key()
+                self.skill_timers["geniemon"] = current_time
+                self.log_info(f"释放魔灵支援（下次: {geniemon_interval}秒后）")
+        
+        # 终结技+战技
+        elif strategy == "终结技+战技":
+            if current_time - self.skill_timers["ultimate"] >= ultimate_interval:
+                self.get_current_char().send_ultimate_key()
+                self.skill_timers["ultimate"] = current_time
+                self.log_info(f"释放终结技（下次: {ultimate_interval}秒后）")
+            elif current_time - self.skill_timers["combat"] >= combat_interval:
+                self.get_current_char().send_combat_key()
+                self.skill_timers["combat"] = current_time
+        
+        # 终结技+魔灵
+        elif strategy == "终结技+魔灵":
+            if current_time - self.skill_timers["ultimate"] >= ultimate_interval:
+                self.get_current_char().send_ultimate_key()
+                self.skill_timers["ultimate"] = current_time
+                self.log_info(f"释放终结技（下次: {ultimate_interval}秒后）")
+            elif current_time - self.skill_timers["geniemon"] >= geniemon_interval:
+                self.get_current_char().send_geniemon_key()
+                self.skill_timers["geniemon"] = current_time
+                self.log_info(f"释放魔灵支援（下次: {geniemon_interval}秒后）")
+        
+        # 战技+魔灵
+        elif strategy == "战技+魔灵":
+            if current_time - self.skill_timers["combat"] >= combat_interval:
+                self.get_current_char().send_combat_key()
+                self.skill_timers["combat"] = current_time
+            elif current_time - self.skill_timers["geniemon"] >= geniemon_interval:
+                self.get_current_char().send_geniemon_key()
+                self.skill_timers["geniemon"] = current_time
+                self.log_info(f"释放魔灵支援（下次: {geniemon_interval}秒后）")
+        
+        # 全部技能
+        elif strategy == "全部技能":
+            # 优先级：终结技 > 魔灵支援 > 战技
+            if current_time - self.skill_timers["ultimate"] >= ultimate_interval:
+                self.get_current_char().send_ultimate_key()
+                self.skill_timers["ultimate"] = current_time
+                self.log_info(f"释放终结技（下次: {ultimate_interval}秒后）")
+            elif current_time - self.skill_timers["geniemon"] >= geniemon_interval:
+                self.get_current_char().send_geniemon_key()
+                self.skill_timers["geniemon"] = current_time
+                self.log_info(f"释放魔灵支援（下次: {geniemon_interval}秒后）")
+            elif current_time - self.skill_timers["combat"] >= combat_interval:
+                self.get_current_char().send_combat_key()
+                self.skill_timers["combat"] = current_time
+        
         return skill_time
 
     def create_skill_ticker(self):
+        """
+        创建技能释放定时器（支持组合模式）
+        """
+        # 初始化技能计时器
+        if not hasattr(self, "skill_timers"):
+            self.skill_timers = {
+                "ultimate": 0,
+                "combat": 0,
+                "geniemon": 0,
+            }
 
         def action():
-            if self.config.get("使用技能", "不使用") == "不使用":
+            strategy = self.config.get("技能释放策略", "不使用")
+            current_time = time.time()
+            
+            # 不使用技能
+            if strategy == "不使用":
                 return
-            if self.config.get("使用技能") == "战技":
-                self.get_current_char().send_combat_key()
-            elif self.config.get("使用技能") == "终结技":
-                self.get_current_char().send_ultimate_key()
-            elif self.config.get("使用技能") == "魔灵支援":
-                self.get_current_char().send_geniemon_key()
+            
+            # 获取技能间隔配置
+            ultimate_interval = self.config.get("终结技间隔(秒)", 15.0)
+            combat_interval = self.config.get("战技间隔(秒)", 3.0)
+            geniemon_interval = self.config.get("魔灵支援间隔(秒)", 10.0)
+            
+            # 只用战技
+            if strategy == "只用战技":
+                if current_time - self.skill_timers["combat"] >= combat_interval:
+                    self.get_current_char().send_combat_key()
+                    self.skill_timers["combat"] = current_time
+            
+            # 只用终结技
+            elif strategy == "只用终结技":
+                if current_time - self.skill_timers["ultimate"] >= ultimate_interval:
+                    self.get_current_char().send_ultimate_key()
+                    self.skill_timers["ultimate"] = current_time
+            
+            # 只用魔灵支援
+            elif strategy == "只用魔灵支援":
+                if current_time - self.skill_timers["geniemon"] >= geniemon_interval:
+                    self.get_current_char().send_geniemon_key()
+                    self.skill_timers["geniemon"] = current_time
+            
+            # 终结技+战技
+            elif strategy == "终结技+战技":
+                if current_time - self.skill_timers["ultimate"] >= ultimate_interval:
+                    self.get_current_char().send_ultimate_key()
+                    self.skill_timers["ultimate"] = current_time
+                elif current_time - self.skill_timers["combat"] >= combat_interval:
+                    self.get_current_char().send_combat_key()
+                    self.skill_timers["combat"] = current_time
+            
+            # 终结技+魔灵
+            elif strategy == "终结技+魔灵":
+                if current_time - self.skill_timers["ultimate"] >= ultimate_interval:
+                    self.get_current_char().send_ultimate_key()
+                    self.skill_timers["ultimate"] = current_time
+                elif current_time - self.skill_timers["geniemon"] >= geniemon_interval:
+                    self.get_current_char().send_geniemon_key()
+                    self.skill_timers["geniemon"] = current_time
+            
+            # 战技+魔灵
+            elif strategy == "战技+魔灵":
+                if current_time - self.skill_timers["combat"] >= combat_interval:
+                    self.get_current_char().send_combat_key()
+                    self.skill_timers["combat"] = current_time
+                elif current_time - self.skill_timers["geniemon"] >= geniemon_interval:
+                    self.get_current_char().send_geniemon_key()
+                    self.skill_timers["geniemon"] = current_time
+            
+            # 全部技能
+            elif strategy == "全部技能":
+                if current_time - self.skill_timers["ultimate"] >= ultimate_interval:
+                    self.get_current_char().send_ultimate_key()
+                    self.skill_timers["ultimate"] = current_time
+                elif current_time - self.skill_timers["geniemon"] >= geniemon_interval:
+                    self.get_current_char().send_geniemon_key()
+                    self.skill_timers["geniemon"] = current_time
+                elif current_time - self.skill_timers["combat"] >= combat_interval:
+                    self.get_current_char().send_combat_key()
+                    self.skill_timers["combat"] = current_time
 
-        return self.create_ticker(action, interval=lambda: self.config.get("技能释放频率", 5))
+        # 使用最小间隔作为 ticker 间隔
+        def get_interval():
+            strategy = self.config.get("技能释放策略", "不使用")
+            if strategy == "不使用":
+                return 5.0
+            # 使用最小间隔，确保及时检查
+            return min(
+                self.config.get("战技间隔(秒)", 3.0),
+                self.config.get("魔灵支援间隔(秒)", 10.0),
+                self.config.get("终结技间隔(秒)", 15.0)
+            )
+        
+        return self.create_ticker(action, interval=get_interval)
+
+    def start_memory_reader(self):
+        """启动内存读取器（自动查找偏移）"""
+        if self.memory_reader is not None:
+            return
+        
+        try:
+            from src.tasks.trigger.AutoAimTask import MemoryReader
+            from src.utils.OffsetFinder import auto_find_offsets
+            
+            # 自动查找偏移（硬性要求）
+            self.log_info("正在自动查找内存偏移...")
+            offsets = auto_find_offsets()
+            
+            if offsets:
+                # 更新全局偏移
+                import src.tasks.trigger.AutoAimTask as aim_module
+                if offsets.get('OFFSET_WORLD'):
+                    aim_module.OFFSET_WORLD = offsets['OFFSET_WORLD']
+                    self.log_info(f"已更新 OFFSET_WORLD = 0x{offsets['OFFSET_WORLD']:X}")
+                if offsets.get('OFFSET_GAMEENGINE'):
+                    aim_module.OFFSET_GAMEENGINE = offsets['OFFSET_GAMEENGINE']
+                    self.log_info(f"已更新 OFFSET_GAMEENGINE = 0x{offsets['OFFSET_GAMEENGINE']:X}")
+                if offsets.get('GNAMES_OFFSET'):
+                    aim_module.GNAMES_OFFSET = offsets['GNAMES_OFFSET']
+                    self.log_info(f"已更新 GNAMES_OFFSET = 0x{offsets['GNAMES_OFFSET']:X}")
+            else:
+                self.log_info("自动查找偏移失败，使用默认值")
+            
+            self.memory_reader = MemoryReader()
+            if self.memory_reader.attach():
+                self.aim_enabled = True
+                self.log_info("内存读取器已启动")
+            else:
+                self.log_info("内存读取器启动失败")
+                self.memory_reader = None
+                self.aim_enabled = False
+        except Exception as e:
+            self.log_error(f"启动内存读取器失败: {e}")
+            import traceback
+            self.log_error(traceback.format_exc())
+            self.memory_reader = None
+            self.aim_enabled = False
+    
+    def stop_memory_reader(self):
+        """停止内存读取器"""
+        if self.memory_reader is not None:
+            try:
+                self.memory_reader.detach()
+                self.log_info("已停止内存读取器")
+            except Exception as e:
+                self.log_error(f"停止内存读取器失败: {e}")
+            finally:
+                self.memory_reader = None
+                self.aim_enabled = False
+    
+    def aim_and_shoot(self):
+        """
+        自动瞄准并射击
+        
+        Returns:
+            bool: 是否成功瞄准并射击
+        """
+        if not self.aim_enabled or not self.memory_reader:
+            self.log_info("自动瞄准未启用或内存读取器未初始化")
+            return False
+        
+        try:
+            import math
+            import ctypes
+            from ctypes import wintypes
+            
+            # 扫描目标
+            max_distance = self.config.get("瞄准距离(米)", 100.0) * 100
+            monsters = self.memory_reader.scan_monsters(max_distance)
+            
+            if not monsters:
+                # 降低日志频率，避免刷屏
+                if not hasattr(self, '_last_no_monster_log'):
+                    self._last_no_monster_log = 0
+                
+                import time
+                current_time = time.time()
+                if current_time - self._last_no_monster_log >= 5:  # 每5秒打印一次
+                    self.log_info(f"未找到 {max_distance/100:.0f}米内的怪物（提示：可增大瞄准距离）")
+                    self._last_no_monster_log = current_time
+                return False
+            
+            self.log_info(f"扫描到 {len(monsters)} 个怪物，最近距离: {monsters[0]['distance']/100:.1f}m")
+            
+            target = monsters[0]  # 最近的目标
+            self.log_info(f"锁定目标: EID={target['eid']}, 距离={target['distance']/100:.1f}m")
+            
+            # 获取相机信息
+            camera_pos = self.memory_reader.get_camera_location()
+            camera_rot = self.memory_reader.get_camera_rotation()
+            
+            if not camera_pos or not camera_rot:
+                return False
+            
+            # 如果相机位置无效，回退到玩家位置
+            if camera_pos[0] == 0 and camera_pos[1] == 0 and camera_pos[2] == 0:
+                camera_pos = self.memory_reader.get_player_location()
+                if not camera_pos:
+                    return False
+            
+            # 预测目标位置
+            prediction_time = self.config.get("预测时间(秒)", 0.15)
+            target_pos = (
+                target['location'][0] + target['velocity'][0] * prediction_time,
+                target['location'][1] + target['velocity'][1] * prediction_time,
+                target['location'][2] + target['velocity'][2] * prediction_time
+            )
+            
+            # 计算目标方向
+            dx = target_pos[0] - camera_pos[0]
+            dy = target_pos[1] - camera_pos[1]
+            dz = target_pos[2] - camera_pos[2]
+            
+            # 计算需要的旋转角度
+            distance_2d = math.sqrt(dx*dx + dy*dy)
+            target_yaw = math.degrees(math.atan2(dy, dx))
+            target_pitch = math.degrees(math.atan2(dz, distance_2d))
+            
+            # 计算角度差
+            current_yaw = camera_rot[1]
+            current_pitch = camera_rot[0]
+            
+            # 标准化 Pitch 角度
+            while current_pitch > 180:
+                current_pitch -= 360
+            while current_pitch < -180:
+                current_pitch += 360
+            
+            # 归一化角度到 [-180, 180]
+            def normalize_angle(angle):
+                while angle > 180:
+                    angle -= 360
+                while angle < -180:
+                    angle += 360
+                return angle
+            
+            current_yaw = normalize_angle(current_yaw)
+            target_yaw = normalize_angle(target_yaw)
+            
+            delta_yaw = normalize_angle(target_yaw - current_yaw)
+            delta_pitch = target_pitch - current_pitch
+            
+            # 转换为鼠标移动
+            sensitivity = self.config.get("鼠标灵敏度", 0.2)
+            pixels_per_degree = 1.0 / sensitivity
+            
+            # 循环调整瞄准，最多20次，直到角度差小于0.5度
+            max_iterations = 20
+            angle_threshold = 0.5
+            
+            for iteration in range(max_iterations):
+                # 重新读取当前相机角度
+                camera_rot = self.memory_reader.get_camera_rotation()
+                if not camera_rot:
+                    break
+                
+                current_yaw = normalize_angle(camera_rot[1])
+                current_pitch = camera_rot[0]
+                while current_pitch > 180:
+                    current_pitch -= 360
+                while current_pitch < -180:
+                    current_pitch += 360
+                
+                # 重新计算角度差
+                delta_yaw = normalize_angle(target_yaw - current_yaw)
+                delta_pitch = target_pitch - current_pitch
+                
+                # 检查是否已经足够精确
+                if abs(delta_yaw) < angle_threshold and abs(delta_pitch) < angle_threshold:
+                    self.log_info(f"瞄准完成: 迭代{iteration+1}次, 角度差=({delta_yaw:.2f}°, {delta_pitch:.2f}°)")
+                    break
+                
+                # 计算鼠标移动量
+                mouse_dx = int(delta_yaw * pixels_per_degree)
+                mouse_dy = int(-delta_pitch * pixels_per_degree)
+                
+                # 限制单次移动量
+                max_move = 200
+                if abs(mouse_dx) > max_move:
+                    mouse_dx = max_move if mouse_dx > 0 else -max_move
+                if abs(mouse_dy) > max_move:
+                    mouse_dy = max_move if mouse_dy > 0 else -max_move
+                
+                # 移动鼠标
+                if abs(mouse_dx) > 1 or abs(mouse_dy) > 1:
+                    # 定义鼠标输入结构
+                    class MOUSEINPUT(ctypes.Structure):
+                        _fields_ = [
+                            ("dx", wintypes.LONG),
+                            ("dy", wintypes.LONG),
+                            ("mouseData", wintypes.DWORD),
+                            ("dwFlags", wintypes.DWORD),
+                            ("time", wintypes.DWORD),
+                            ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
+                        ]
+                    
+                    class INPUT(ctypes.Structure):
+                        _fields_ = [
+                            ("type", wintypes.DWORD),
+                            ("mi", MOUSEINPUT)
+                        ]
+                    
+                    INPUT_MOUSE = 0
+                    MOUSEEVENTF_MOVE = 0x0001
+                    
+                    input_struct = INPUT()
+                    input_struct.type = INPUT_MOUSE
+                    input_struct.mi.dx = mouse_dx
+                    input_struct.mi.dy = mouse_dy
+                    input_struct.mi.mouseData = 0
+                    input_struct.mi.dwFlags = MOUSEEVENTF_MOVE
+                    input_struct.mi.time = 0
+                    input_struct.mi.dwExtraInfo = None
+                    
+                    ctypes.windll.user32.SendInput(1, ctypes.byref(input_struct), ctypes.sizeof(input_struct))
+                    
+                    # 短暂延迟让鼠标移动生效
+                    import time
+                    time.sleep(0.025)
+                else:
+                    # 移动量太小，认为已经对准
+                    break
+            
+            # 射击
+            shoot_time = self.config.get("射击按下时间(秒)", 0.5)
+            recovery_time = self.config.get("射击后摇时间(秒)", 0.3)
+            
+            self.mouse_down(key="right")
+            self.sleep(shoot_time)
+            self.mouse_up(key="right")
+            self.sleep(recovery_time)
+            
+            self.log_info(f"✓ 瞄准射击完成: 距离={target['distance']/100:.1f}m, ModelID={target['model_id']}")
+            return True
+            
+        except Exception as e:
+            self.log_error(f"瞄准射击失败: {e}")
+            import traceback
+            self.log_error(traceback.format_exc())
+            return False
+    
+    def create_aim_shoot_ticker(self):
+        """创建自动瞄准射击定时器"""
+        last_log_time = [0]  # 使用列表避免闭包问题
+        
+        def action():
+            if self.config.get("启用自动瞄准射击", "关闭") == "开启":
+                if not self.aim_enabled:
+                    self.start_memory_reader()
+                
+                if self.aim_enabled:
+                    # 每10秒打印一次调试信息
+                    import time
+                    current_time = time.time()
+                    if current_time - last_log_time[0] >= 10:
+                        self.log_info("自动瞄准射击 ticker 正在运行...")
+                        last_log_time[0] = current_time
+                    
+                    self.aim_and_shoot()
+                else:
+                    self.log_info("内存读取器未启用，跳过瞄准射击")
+        
+        # 射击间隔 = 按下时间 + 后摇时间
+        def get_interval():
+            return self.config.get("射击按下时间(秒)", 0.5) + self.config.get("射击后摇时间(秒)", 0.3)
+        
+        return self.create_ticker(action, interval=get_interval)
 
     def get_round_info(self):
         """获取并更新当前轮次信息。"""

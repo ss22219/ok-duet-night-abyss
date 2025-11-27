@@ -10,16 +10,46 @@ import math
 import threading
 import time
 from ctypes import wintypes
+from typing import Optional
 
 logger = Logger.get_logger(__name__)
+
+# 尝试导入 OffsetFinder
+try:
+    from src.utils.OffsetFinder import auto_find_offsets
+    OFFSET_FINDER_AVAILABLE = True
+except ImportError:
+    OFFSET_FINDER_AVAILABLE = False
+    logger.warning("OffsetFinder 不可用，无法自动查找偏移")
 
 # Windows API 常量
 PROCESS_VM_READ = 0x0010
 PROCESS_QUERY_INFORMATION = 0x0400
 
-# 游戏偏移
-OFFSET_GAMEENGINE = 0x6FC64A0
+# 鼠标输入结构（提前定义，避免重复）
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
+    ]
+
+class INPUT(ctypes.Structure):
+    _fields_ = [
+        ("type", wintypes.DWORD),
+        ("mi", MOUSEINPUT)
+    ]
+
+INPUT_MOUSE = 0
+MOUSEEVENTF_MOVE = 0x0001
+
+# 游戏偏移 (可通过 OffsetFinder 自动更新)
+OFFSET_GAMEENGINE = 0x6E63030  # 正确的 GEngine 偏移（从 IDA 验证）
 OFFSET_WORLD = 0x6FCA098
+GNAMES_OFFSET = 0x6E1FA80      # 正确的 GNames 偏移（从 RealtimeFNameReader.cs 获取）
 OFFSET_GAMESTATE = 0x130
 OFFSET_BATTLE = 0xE90
 OFFSET_GAMEINSTANCE = 0xE18
@@ -165,6 +195,48 @@ class MemoryReader:
             return struct.unpack('<fff', data)
         return (0.0, 0.0, 0.0)
     
+    def read_short(self, address):
+        """读取 16 位整数"""
+        data = self.read_bytes(address, 2)
+        return struct.unpack('<h', data)[0] if data else 0
+    
+    def is_valid_pointer(self, ptr):
+        """检查指针是否有效"""
+        return ptr > 0x10000 and ptr < 0x7FFFFFFFFFFF
+    
+    def read_fname(self, object_ptr):
+        """读取 FName"""
+        try:
+            if not self.module_base:
+                return ""
+            
+            gnames_address = self.module_base + GNAMES_OFFSET
+            
+            name_index = self.read_int32(object_ptr + 0x18)  # UObject.Name offset
+            if name_index == 0:
+                return ""
+            
+            chunk_offset = name_index >> 16
+            name_offset = name_index & 0xFFFF
+            
+            chunk_ptr = self.read_int64(gnames_address + 8 * (chunk_offset + 2))
+            if not self.is_valid_pointer(chunk_ptr):
+                return ""
+            
+            name_pool_chunk = chunk_ptr + 2 * name_offset
+            header = self.read_short(name_pool_chunk)
+            name_length = header >> 6
+            
+            if name_length <= 0 or name_length > 1024:
+                return ""
+            
+            buffer = self.read_bytes(name_pool_chunk + 2, name_length)
+            if buffer:
+                return buffer.decode('ascii', errors='ignore').rstrip('\0')
+            return ""
+        except:
+            return ""
+    
     def get_game_state(self):
         """获取 GameState 指针"""
         if not self.module_base:
@@ -288,28 +360,44 @@ class MemoryReader:
             logger.error(f"获取相机旋转异常: {e}")
             return None
     
-    def scan_monsters(self, max_distance=10000.0):
+    def scan_monsters(self, max_distance=10000.0, debug=False):
         """扫描附近怪物"""
         monsters = []
         game_state = self.get_game_state()
         if not game_state:
-            logger.info("❌ GameState 为空")
+            if debug:
+                logger.info("❌ GameState 为空")
             return monsters
         
         player_pos = self.get_player_location()
         if not player_pos:
-            return monsters
+            # 玩家位置获取失败，但仍然可以返回怪物（距离为0）
+            if debug:
+                logger.info("⚠ 无法获取玩家位置，距离计算将不准确")
+            player_pos = None
         
         # 读取 MonsterMap
         monster_map_addr = game_state + OFFSET_MONSTERMAP
         map_data = self.read_bytes(monster_map_addr, 40)  # TMapData 结构
         if not map_data:
+            if debug:
+                logger.info("❌ 无法读取 MonsterMap")
             return monsters
         
         data_ptr, array_num = struct.unpack('<Qi', map_data[:12])
         
         if array_num <= 0 or data_ptr == 0:
+            # MonsterMap 为空，这是正常的（可能在主菜单或没有怪物的场景）
             return monsters
+        
+        if debug:
+            logger.info(f"MonsterMap: array_num={array_num}, 开始扫描...")
+        
+        # 统计信息
+        total_entities = 0
+        filtered_by_objtype = 0
+        filtered_by_name = 0
+        filtered_by_distance = 0
         
         for i in range(min(array_num, 500)):
             element_addr = data_ptr + i * 24
@@ -323,6 +411,8 @@ class MemoryReader:
             if hash_index == -1 or value_ptr == 0:
                 continue
             
+            total_entities += 1
+            
             # 读取怪物信息
             eid = self.read_int32(value_ptr + OFFSET_EID)
             if eid <= 0:
@@ -332,37 +422,68 @@ class MemoryReader:
             if already_dead:
                 continue
             
-            # 读取 ModelId 并过滤友方召唤物（和 C# 一样的过滤逻辑）
+            # 读取 ModelId
             model_id = self.read_int32(value_ptr + OFFSET_MODELID)
             
-            # 过滤友方召唤物（基于 ModelId）
-            # 210101 = 友方召唤物, 210199 = PhantomCharacter
-            if model_id < 500000 or model_id > 9000000:
-                continue
-            
+            # 读取 ObjType
             obj_type = self.read_bytes(value_ptr + OFFSET_OBJTYPE, 1)
             obj_type_val = obj_type[0] if obj_type else 0
-            if obj_type_val != 10:  # 只要 MonsterCharacter
+            
+            # 调试：记录所有实体
+            if debug and i < 10:  # 只打印前10个
+                logger.info(f"  实体 {i}: EID={eid}, ModelID={model_id}, ObjType={obj_type_val}, Dead={already_dead}")
+            
+            # 过滤逻辑（接受 ObjType 10 和 11）
+            # ObjType 10 = MonsterCharacter, 11 = 其他怪物类型
+            if obj_type_val not in [10, 11]:
+                filtered_by_objtype += 1
+                continue
+            
+            # 读取类名，检查是否是怪物（BP_Mon 开头）
+            class_ptr = self.read_int64(value_ptr + 0x10)  # UObject.Class offset
+            class_name = ""
+            if self.is_valid_pointer(class_ptr):
+                class_name = self.read_fname(class_ptr)
+            
+            # 只接受 BP_Mon 或 BP_Boss 开头的实体（真正的怪物）
+            if not (class_name.startswith("BP_Mon_") or class_name.startswith("BP_Boss_")):
+                filtered_by_name += 1
+                if debug and total_entities <= 10:
+                    logger.info(f"  跳过非怪物: ClassName={class_name}, ObjType={obj_type_val}")
                 continue
             
             location = self.read_vector3(value_ptr + OFFSET_CURRENTLOCATION)
             velocity = self.read_vector3(value_ptr + OFFSET_CURRENTVELOCITY)
             
             # 计算距离
-            dx = location[0] - player_pos[0]
-            dy = location[1] - player_pos[1]
-            dz = location[2] - player_pos[2]
-            distance = math.sqrt(dx*dx + dy*dy + dz*dz)
+            if player_pos:
+                dx = location[0] - player_pos[0]
+                dy = location[1] - player_pos[1]
+                dz = location[2] - player_pos[2]
+                distance = math.sqrt(dx*dx + dy*dy + dz*dz)
+            else:
+                distance = 0.0  # 无法获取玩家位置时，距离设为0
             
             if distance <= max_distance:
+                if debug:
+                    logger.info(f"  ✓ 找到怪物: {class_name}, EID={eid}, ModelID={model_id}, 距离={distance/100:.1f}m")
+                
                 monsters.append({
                     'eid': eid,
                     'model_id': model_id,
+                    'class_name': class_name,
                     'location': location,
                     'velocity': velocity,
                     'distance': distance,
                     'ptr': value_ptr
                 })
+            else:
+                filtered_by_distance += 1
+        
+        if debug:
+            logger.info(f"扫描完成: 找到 {len(monsters)} 个怪物")
+            logger.info(f"  总实体: {total_entities}, 按ObjType过滤: {filtered_by_objtype}, 按名称过滤: {filtered_by_name}, 按距离过滤: {filtered_by_distance}")
+        
         return sorted(monsters, key=lambda m: m['distance'])
 
 
@@ -391,11 +512,16 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
             "type": "drop_down",
             "options": ["关闭", "开启"]
         }
+        self.config_type["自动查找偏移"] = {
+            "type": "drop_down",
+            "options": ["关闭", "开启"]
+        }
         self.config_description.update(
             {
                 "按下时间": "右键按住多久(秒)",
                 "间隔时间": "右键释放后等待多久(秒)",
                 "启用内存瞄准": "使用内存读取自动瞄准最近怪物",
+                "自动查找偏移": "游戏更新后自动查找新的内存偏移",
                 "瞄准距离": "最大瞄准距离(米)，默认100",
                 "鼠标灵敏度": "瞄准灵敏度，默认0.2",
                 "扫描延迟": "扫描间隔(毫秒)，默认50",
@@ -437,6 +563,25 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
             return
         
         try:
+            # 如果启用了自动查找偏移
+            if OFFSET_FINDER_AVAILABLE and self.config.get("自动查找偏移", "关闭") == "开启":
+                logger.info("正在自动查找内存偏移...")
+                offsets = auto_find_offsets()
+                if offsets:
+                    # 更新全局偏移
+                    global OFFSET_WORLD, OFFSET_GAMEENGINE, GNAMES_OFFSET
+                    if offsets.get('OFFSET_WORLD'):
+                        OFFSET_WORLD = offsets['OFFSET_WORLD']
+                        logger.info(f"已更新 OFFSET_WORLD = 0x{OFFSET_WORLD:X}")
+                    if offsets.get('OFFSET_GAMEENGINE'):
+                        OFFSET_GAMEENGINE = offsets['OFFSET_GAMEENGINE']
+                        logger.info(f"已更新 OFFSET_GAMEENGINE = 0x{OFFSET_GAMEENGINE:X}")
+                    if offsets.get('GNAMES_OFFSET'):
+                        GNAMES_OFFSET = offsets['GNAMES_OFFSET']
+                        logger.info(f"已更新 GNAMES_OFFSET = 0x{GNAMES_OFFSET:X}")
+                else:
+                    logger.warning("自动查找偏移失败，使用默认值")
+            
             self.memory_reader = MemoryReader()
             if self.memory_reader.attach():
                 logger.info("内存读取器已启动")
@@ -603,41 +748,18 @@ class AutoAimTask(BaseListenerTask, BaseCombatTask, TriggerTask):
             if abs(mouse_dy) > max_move:
                 mouse_dy = max_move if mouse_dy > 0 else -max_move
             
-            # 移动鼠标
+            # 移动鼠标（使用 SendInput 相对移动）
             if abs(mouse_dx) > 1 or abs(mouse_dy) > 1:
-                # 定义 INPUT 结构
-                class MOUSEINPUT(ctypes.Structure):
-                    _fields_ = [
-                        ("dx", wintypes.LONG),
-                        ("dy", wintypes.LONG),
-                        ("mouseData", wintypes.DWORD),
-                        ("dwFlags", wintypes.DWORD),
-                        ("time", wintypes.DWORD),
-                        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
-                    ]
+                input_struct = INPUT()
+                input_struct.type = INPUT_MOUSE
+                input_struct.mi.dx = mouse_dx
+                input_struct.mi.dy = mouse_dy
+                input_struct.mi.mouseData = 0
+                input_struct.mi.dwFlags = MOUSEEVENTF_MOVE
+                input_struct.mi.time = 0
+                input_struct.mi.dwExtraInfo = None
                 
-                class INPUT(ctypes.Structure):
-                    _fields_ = [
-                        ("type", wintypes.DWORD),
-                        ("mi", MOUSEINPUT)
-                    ]
-                
-                # 常量
-                INPUT_MOUSE = 0
-                MOUSEEVENTF_MOVE = 0x0001
-                
-                # 创建 INPUT 结构
-                x = INPUT()
-                x.type = INPUT_MOUSE
-                x.mi.dx = mouse_dx
-                x.mi.dy = mouse_dy
-                x.mi.mouseData = 0
-                x.mi.dwFlags = MOUSEEVENTF_MOVE
-                x.mi.time = 0
-                x.mi.dwExtraInfo = None
-                
-                # 调用 SendInput
-                ctypes.windll.user32.SendInput(1, ctypes.byref(x), ctypes.sizeof(x))
+                ctypes.windll.user32.SendInput(1, ctypes.byref(input_struct), ctypes.sizeof(input_struct))
                 return True
             
             return False

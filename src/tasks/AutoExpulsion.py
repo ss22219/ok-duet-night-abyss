@@ -46,6 +46,7 @@ class AutoExpulsion(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         
         self.skill_tick = self.create_skill_ticker()
         self.random_walk_tick = self.create_random_walk_ticker()
+        self.aim_shoot_tick = self.create_aim_shoot_ticker()  # 添加自动瞄准射击
 
     def run(self):
         DNAOneTimeTask.run(self)
@@ -83,7 +84,16 @@ class AutoExpulsion(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
     def init_all(self):
         self.init_for_next_round()
         self.skill_tick.reset()
+        self.aim_shoot_tick.reset()  # 重置自动瞄准射击
         self.current_round = 0
+        
+        # 清空技能计时器，让技能立即可用
+        if hasattr(self, "skill_timers"):
+            self.skill_timers = {
+                "ultimate": 0,
+                "combat": 0,
+                "geniemon": 0,
+            }
 
     def init_for_next_round(self):
         self.init_runtime_state()
@@ -105,6 +115,14 @@ class AutoExpulsion(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
 
         self.random_walk_tick()
         self.skill_tick()
+        
+        # 执行自动瞄准射击（添加调试）
+        try:
+            self.aim_shoot_tick()
+        except Exception as e:
+            logger.error(f"aim_shoot_tick 异常: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def handle_mission_start(self):
         if self.count >= self.config.get("刷几次", 999):

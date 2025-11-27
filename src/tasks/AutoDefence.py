@@ -38,6 +38,7 @@ class AutoDefence(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         self._external_config = None
         self._merged_config_cache = None
         self.skill_tick = self.create_skill_ticker()
+        self.aim_shoot_tick = self.create_aim_shoot_ticker()  # 添加自动瞄准射击
 
     @property
     def config(self):
@@ -100,6 +101,7 @@ class AutoDefence(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
     def init_all(self):
         self.init_for_next_round()
         self.skill_tick.reset()
+        self.aim_shoot_tick.reset()  # 重置自动瞄准射击
         self.current_round = 0
 
     def init_for_next_round(self):
@@ -131,9 +133,10 @@ class AutoDefence(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
                     self.soundBeep()
                     self.runtime_state["wait_next_wave"] = True
 
-            # 如果未超时，则使用技能
+            # 如果未超时，则使用技能和自动瞄准射击
             if not self.runtime_state["wait_next_wave"]:
                 self.skill_tick()
+                self.aim_shoot_tick()  # 执行自动瞄准射击
         else:
             if self.runtime_state["wave"] > 0:
                 self.init_runtime_state()
