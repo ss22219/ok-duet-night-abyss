@@ -313,8 +313,6 @@ class CommissionsTask(BaseDNATask):
             self.click_box_random(target_item['reward_obj'], left_extend=0.015, right_extend=0.015, up_extend=0.03, down_extend=0.03, down_time=0.02, after_sleep=0.5)
 
     def choose_letter_reward(self, timeout=0):
-        if not hasattr(self, "config"):
-            return
         action_timeout = self.action_timeout if timeout == 0 else timeout
         if self.config.get("自动选择首个密函和密函奖励", False):
             if self.config.get("优先选择密函奖励", "不使用") != "不使用":
@@ -333,20 +331,7 @@ class CommissionsTask(BaseDNATask):
                 time_out=300,
                 raise_if_not_found=True,
             )
-        self.sleep(3)
-
-    def use_skill(self, skill_time):
-        if not hasattr(self, "config"):
-            return
-        if self.config.get("使用技能", "不使用") != "不使用" and time.time() - skill_time >= self.config.get("技能释放频率", 5):
-            skill_time = time.time()
-            if self.config.get("使用技能") == "战技":
-                self.get_current_char().send_combat_key()
-            elif self.config.get("使用技能") == "终结技":
-                self.get_current_char().send_ultimate_key()
-            elif self.config.get("使用技能") == "魔灵支援":
-                self.get_current_char().send_geniemon_key()
-        return skill_time
+        self.sleep(0.1)
 
     def create_skill_ticker(self):
 
@@ -366,8 +351,8 @@ class CommissionsTask(BaseDNATask):
         """获取并更新当前轮次信息。"""
         if self.in_team():
             return
-
-        self.sleep(1)
+        box = self.box_of_screen(0.241, 0.361, 0.259, 0.394, name="green_mark", hcenter=True)
+        self.wait_until(lambda: self.calculate_color_percentage(green_mark_color, box) > 0.135, time_out=1)
         round_info_box = self.box_of_screen_scaled(2560, 1440, 531, 517, 618, 602, name="round_info", hcenter=True)
         texts = self.ocr(box=round_info_box)
 
@@ -477,10 +462,9 @@ class CommissionsTask(BaseDNATask):
 
     def reset_and_transport(self):
         self.open_in_mission_menu()
-        self.sleep(0.8)
         self.wait_until(
             condition=lambda: not self.find_esc_menu(),
-            post_action=self.click_relative_random(0.688, 0.875, 0.770, 0.956, after_sleep=0.5),
+            post_action=self.click_relative_random(0.688, 0.875, 0.770, 0.956),
             time_out=10,
         )
         setting_box = self.box_of_screen_scaled(2560, 1440, 738, 4, 1123, 79, name="other_section", hcenter=True)
@@ -488,13 +472,13 @@ class CommissionsTask(BaseDNATask):
                                         raise_if_not_found=True)
         self.wait_until(
             condition=lambda: self.calculate_color_percentage(setting_menu_selected_color, setting_other) > 0.24,
-            post_action=lambda: self.click_box_random(setting_other, after_sleep=0.5),
+            post_action=lambda: self.click_box_random(setting_other),
             time_out=10,
         )
         confirm_box = self.box_of_screen_scaled(2560, 1440, 1298, 776, 1368, 843, name="confirm_btn", hcenter=True)
         self.wait_until(
             condition=lambda: self.find_start_btn(box=confirm_box),
-            post_action=lambda: self.click_relative_random(0.501, 0.294, 0.690, 0.325, use_safe_move=True, after_sleep=0.5),
+            post_action=lambda: self.click_relative_random(0.501, 0.294, 0.690, 0.325, use_safe_move=True),
             time_out=10,
         )
         if not self.wait_until(condition=self.in_team, post_action=lambda: self.click_relative_random(0.514, 0.547, 0.671, 0.578, after_sleep=0.5),
@@ -541,6 +525,12 @@ retry_btn_color = {
     'r': (220, 230),  # Red range
     'g': (175, 185),  # Green range
     'b': (79, 89)  # Blue range
+}
+
+green_mark_color = {
+    'r': (40, 55),  # Red range
+    'g': (165, 170),  # Green range
+    'b': (120, 130)  # Blue range
 }
 
 

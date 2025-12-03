@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from functools import cached_property
 
-from ok import BaseTask, Box, Logger, color_range_to_bound, run_in_new_thread, og, GenshinInteraction, PyDirectInteraction, TaskDisabledException
+from ok import BaseTask, Box, Logger, color_range_to_bound, run_in_new_thread, og, GenshinInteraction, PyDirectInteraction
 
 logger = Logger.get_logger(__name__)
 f_black_color = {
@@ -336,7 +336,7 @@ class BaseDNATask(BaseTask):
 
         self.sleep(after_sleep)
     
-    def click_box_random(self, box: Box, down_time=0.0, post_sleep=1.5, after_sleep=0.0, use_safe_move=False, safe_move_box=None, left_extend=0.0, right_extend=0.0, up_extend=0.0, down_extend=0.0):
+    def click_box_random(self, box: Box, down_time=0.0, post_sleep=1.0, after_sleep=0.0, use_safe_move=False, safe_move_box=None, left_extend=0.0, right_extend=0.0, up_extend=0.0, down_extend=0.0):
         le_px = left_extend * self.width
         re_px = right_extend * self.width
         ue_px = up_extend * self.height
@@ -351,7 +351,7 @@ class BaseDNATask(BaseTask):
             down_time, post_sleep, after_sleep
         )
 
-    def click_relative_random(self, x1, y1, x2, y2, down_time=0.02, post_sleep=1.5, after_sleep=0.0, use_safe_move=False, safe_move_box=None):
+    def click_relative_random(self, x1, y1, x2, y2, down_time=0.02, post_sleep=1.0, after_sleep=0.0, use_safe_move=False, safe_move_box=None):
         r_x = random.uniform(x1, x2)
         r_y = random.uniform(y1, y2)
 
@@ -506,22 +506,21 @@ class BaseDNATask(BaseTask):
         self.genshin_interaction.move_mouse_relative(int(dx), int(dy))
 
     def try_bring_to_front(self):
-        deadline = time.perf_counter() + 10
-        while time.perf_counter() < deadline:
+        if not self.hwnd.is_foreground():
+            def key_press(key, after_sleep=0):
+                win32api.keybd_event(key, 0, 0, 0)
+                win32api.keybd_event(key, 0, win32con.KEYEVENTF_KEYUP, 0)
+                self.sleep(after_sleep)
+
+            key_press(win32con.VK_MENU)
             try:
-                if not self.hwnd.is_foreground():
-                    win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-                    win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-                    self.hwnd.bring_to_front()
-                    self.sleep(0.5)
-                break
-            except TaskDisabledException:
-                raise
-            except Exception as e:
-                logger.error('try_bring_to_front error', e)
-                self.sleep(1)
-        else:
-            raise Exception("Failed to bring window to front after multiple retries.")
+                self.hwnd.bring_to_front()
+            except Exception:
+                key_press(win32con.VK_LWIN, 0.1)
+                key_press(win32con.VK_LWIN, 0.1)
+                key_press(win32con.VK_MENU)
+                self.hwnd.bring_to_front()
+            self.sleep(0.5)
         
     def setup_jitter(self):
         def _jitter_loop_task():
