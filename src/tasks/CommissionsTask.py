@@ -1,6 +1,5 @@
 import re
 import time
-import random
 from enum import Enum
 
 from ok import find_boxes_by_name, TaskDisabledException

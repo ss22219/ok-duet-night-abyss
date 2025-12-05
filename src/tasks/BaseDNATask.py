@@ -200,13 +200,13 @@ class BaseDNATask(BaseTask):
         if self.afk_config["防止鼠标干扰"]:
             self.old_mouse_pos = win32api.GetCursorPos() if save_current_pos else None
             if self.rel_move_if_in_win(0.95, 0.6, box=box):
-                self.sleep(0.01)
+                self.sleep(0.001)
             else:
                 self.old_mouse_pos = None
 
     def move_back_from_safe_position(self):
         if self.afk_config["防止鼠标干扰"] and self.old_mouse_pos is not None:
-            self.sleep(0.01)
+            self.sleep(0.001)
             win32api.SetCursorPos(self.old_mouse_pos)
             self.old_mouse_pos = None
 
