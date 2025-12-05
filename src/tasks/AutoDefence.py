@@ -114,12 +114,18 @@ class AutoDefence(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
     def handle_in_mission(self):
         """处理在副本中的逻辑"""
         self.get_wave_info()
+        
+        # 始终执行技能和瞄准（只要在队伍中）
+        self.skill_tick()
+        self.aim_shoot_tick()
+        
         if self.current_wave != -1:
             # 如果是新的波次，重置状态
             if self.current_wave != self.runtime_state["wave"]:
                 self.runtime_state.update(
                     {"wave": self.current_wave, "wave_start_time": time.time(), "wait_next_wave": False})
                 self.quick_move_task.reset()
+                self.log_info(f"进入波次 {self.current_wave}")
 
             # 检查波次是否超时
             if not self.runtime_state["wait_next_wave"] and time.time() - self.runtime_state[
@@ -132,11 +138,6 @@ class AutoDefence(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
                     self.log_info_notify("任务超时")
                     self.soundBeep()
                     self.runtime_state["wait_next_wave"] = True
-
-            # 如果未超时，则使用技能和自动瞄准射击
-            if not self.runtime_state["wait_next_wave"]:
-                self.skill_tick()
-                self.aim_shoot_tick()  # 执行自动瞄准射击
         else:
             if self.runtime_state["wave"] > 0:
                 self.init_runtime_state()

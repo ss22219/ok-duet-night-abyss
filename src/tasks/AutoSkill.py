@@ -33,6 +33,7 @@ class AutoSkill(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         })
 
         self.skill_tick = self.create_skill_ticker()
+        self.aim_shoot_tick = self.create_aim_shoot_ticker()
         self.action_timeout = 10
 
     def run(self):
@@ -52,6 +53,7 @@ class AutoSkill(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         while True:
             if self.in_team():
                 self.skill_tick()
+                self.aim_shoot_tick()
             else:
                 if self.config.get('主画面侦测', False):
                     self.log_info_notify('任务完成')
@@ -65,3 +67,4 @@ class AutoSkill(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
 
     def init_all(self):
         self.skill_tick.reset()
+        self.aim_shoot_tick.reset()

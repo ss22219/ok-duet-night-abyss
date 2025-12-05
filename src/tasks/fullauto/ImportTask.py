@@ -71,6 +71,7 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         })
 
         self.skill_tick = self.create_skill_ticker()
+        self.aim_shoot_tick = self.create_aim_shoot_ticker()
         self.action_timeout = 10
         self.quick_move_task = QuickMoveTask(self)
 
@@ -112,6 +113,7 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
                     if self.current_wave != self.runtime_state["wave"]:
                         self.runtime_state["wave"] = self.current_wave
                 self.skill_tick()
+                self.aim_shoot_tick()
                 if time.time() - self.runtime_state["wave_start_time"] >= self.config.get('超时时间', 180):
                     self.log_info('任务超时')
                     self.open_in_mission_menu()

@@ -37,6 +37,7 @@ class AutoExploration(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         self.external_movement = _default_movement
         self._external_config = None
         self.skill_tick = self.create_skill_ticker()
+        self.aim_shoot_tick = self.create_aim_shoot_ticker()
         self._merged_config_cache = None
 
     @property
@@ -100,6 +101,7 @@ class AutoExploration(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
     def init_all(self):
         self.init_for_next_round()
         self.skill_tick.reset()
+        self.aim_shoot_tick.reset()
         self.current_round = 0
 
     def init_for_next_round(self):
@@ -109,6 +111,10 @@ class AutoExploration(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         self.runtime_state = {"start_time": 0, "wait_next_round": False}
 
     def handle_in_mission(self):
+        # 始终执行技能和瞄准（只要在队伍中）
+        self.skill_tick()
+        self.aim_shoot_tick()
+        
         if self.find_serum():
             if self.runtime_state["start_time"] == 0:
                 self.runtime_state["start_time"] = time.time()
@@ -123,9 +129,6 @@ class AutoExploration(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
                     self.log_info_notify("任务超时")
                     self.soundBeep()
                     self.runtime_state["wait_next_round"] = True
-            
-            if not self.runtime_state["wait_next_round"]:
-                self.skill_tick()
         else:
             if self.runtime_state["start_time"] > 0:
                 self.init_runtime_state()
