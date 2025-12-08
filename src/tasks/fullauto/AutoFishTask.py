@@ -32,7 +32,6 @@ class AutoFishTask(DNAOneTimeTask, BaseDNATask):
             "MAX_START_SEC": 20.0,
             "MAX_FIGHT_SEC": 60.0,
             "MAX_END_SEC": 20.0,
-            "发出声音提醒": True,
         })
 
         # ROI 配置（鱼条和鱼标搜索区域，基于 1920x1080）
@@ -45,7 +44,6 @@ class AutoFishTask(DNAOneTimeTask, BaseDNATask):
             "MAX_START_SEC": "开始阶段超时(秒)",
             "MAX_FIGHT_SEC": "溜鱼阶段超时(秒)",
             "MAX_END_SEC": "结束阶段超时(秒)",
-            "发出声音提醒": "完成时播放提示音",
         })
 
         # runtime

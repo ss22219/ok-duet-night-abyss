@@ -129,7 +129,7 @@ class Auto65ArtifactTask_Fast(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
     #         # 短暂休眠
     #         self.sleep(0.2)
 
-    def walk_to_aim(self):
+    def walk_to_aim(self, delay=0):
         """
         从起点走到目标位置的路径
         路径参考: EMT中的扼守-30or65.json，使用复位
@@ -143,7 +143,7 @@ class Auto65ArtifactTask_Fast(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
             # 0.52s: 开始向前移动
             self.send_key_down("lalt")
 
-            self.sleep(2)
+            self.sleep(delay)
             self.send_key_down("w")
 
             # 1.11s: 开始冲刺 (0.59s后)

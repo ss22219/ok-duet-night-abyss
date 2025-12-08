@@ -1,8 +1,6 @@
 from qfluentwidgets import FluentIcon
 import re
 import time
-import win32con
-import win32api
 import cv2
 import os
 import json
@@ -12,13 +10,9 @@ from functools import cached_property
 from pathlib import Path
 from PIL import Image
 from ok import Logger, TaskDisabledException, GenshinInteraction
-from ok import find_boxes_by_name
 from src.tasks.DNAOneTimeTask import DNAOneTimeTask
 from src.tasks.CommissionsTask import CommissionsTask, Mission, QuickMoveTask
 from src.tasks.BaseCombatTask import BaseCombatTask
-
-from src.tasks.trigger.AutoMazeTask import AutoMazeTask
-from src.tasks.trigger.AutoRouletteTask import AutoRouletteTask
 
 from src.tasks.AutoDefence import AutoDefence
 from src.tasks.AutoExpulsion import AutoExpulsion
@@ -132,8 +126,7 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
                 self.wait_until(self.in_team, time_out=30)
                 self.log_info('任务开始')
                 self.init_all()
-                self.sleep(2)
-                self.walk_to_aim()
+                self.walk_to_aim(delay=2)
                 now = time.time()
                 self.runtime_state.update({"wave_start_time": now, "delay_task_start": now + 1})
             elif _status == Mission.CONTINUE:
@@ -217,7 +210,16 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         png_files = {key: png_files[key] for key in sorted(png_files.keys(), key=lambda x: (len(x), x))}
         return png_files
 
-    def walk_to_aim(self, former_index=None):
+    def walk_to_aim(self, former_index=None, delay=0):
+        try:
+            self.hold_lalt = True
+            self.sleep(delay)
+            ret = self._walk_to_aim(former_index)
+        finally:
+            self.hold_lalt = False
+        return ret
+
+    def _walk_to_aim(self, former_index=None):
         """
         尝试匹配下一个地图节点并执行宏。
         """
@@ -295,7 +297,9 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         box = self.box_of_screen_scaled(2560, 1440, 1, 1, 2559, 1439, name="full_screen", hcenter=True)
 
         # 只裁剪和转换一次屏幕
-        cropped_screen = box.crop_frame(self.frame)
+        frame = self.frame
+        self.shared_frame = frame
+        cropped_screen = box.crop_frame(frame)
         screen_gray = cv2.cvtColor(cropped_screen, cv2.COLOR_BGR2GRAY)
 
         count = 0
@@ -346,6 +350,9 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
 
             count += 1
 
+            if self.height != 1080:
+                scale_factor = self.height / 1080
+                template_gray = cv2.resize(template_gray, (0, 0), fx=scale_factor, fy=scale_factor, interpolation=cv2.INTER_LINEAR)
             # 执行匹配
             result = cv2.matchTemplate(screen_gray, template_gray, cv2.TM_CCOEFF_NORMED)
             _, threshold, _, _, = cv2.minMaxLoc(result)
@@ -378,24 +385,33 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
     def play_macro_actions(self, map_index):
         actions = self.script[map_index]["actions"]
 
+        if "original_x_sensitivity" and "original_y_sensitivity" in self.script[map_index] :
+            self.original_Xsensitivity = self.script[map_index]["original_x_sensitivity"]
+            self.original_Ysensitivity = self.script[map_index]["original_y_sensitivity"]
+        else:
+            self.original_Xsensitivity = 1.0
+            self.original_Ysensitivity = 1.0
+      
         # 使用 perf_counter 获得更高精度的时间
         start_time = time.perf_counter()
 
         for action in actions:
             target_time = action['time']
 
-            # 等待直到达到动作指定的时间戳
-            while True:
-                current_offset = time.perf_counter() - start_time
-                if current_offset >= target_time:
-                    break
+            if self.check_for_monthly_card()[0]:
+                raise MacroFailedException
 
-                # 检查中断条件
-                if self.check_for_monthly_card()[0]:
-                    raise MacroFailedException
+            self.next_frame()
+            self.shared_frame = self.frame
 
-                # 这里的 next_frame 最好包含微小的 sleep，防止 CPU 100% 空转
-                self.next_frame()
+            current_offset = time.perf_counter() - start_time
+            delay = target_time - current_offset
+            target = time.perf_counter() + delay
+            if delay > 0.02:
+                self.sleep(delay - 0.02)
+
+            while time.perf_counter() < target:
+                pass
 
             if action['type'] == "delay":
                 self.delay_index = map_index
@@ -413,7 +429,7 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
 
         try:
             if action_type == "mouse_move":
-                self.execute_mouse_move(action['dx'], action['dy'])
+                self.move_mouse_relative(action['dx'], action['dy'], self.original_Xsensitivity, self.original_Ysensitivity)
 
             elif action_type == "mouse_rotation":
                 self.execute_mouse_rotation(action)
@@ -458,6 +474,8 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
             key = self.get_combat_key()
         elif key == 'q':
             key = self.get_ultimate_key()
+        elif 'alt' in key:
+            return
 
         # 4. 执行实际按键操作
         if action_type == "key_down":
@@ -508,17 +526,8 @@ class ImportTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
             return
 
         dx, dy = direction_map[direction]
-        self.execute_mouse_move(dx, dy)
+        self.move_mouse_relative(dx, dy, self.original_Xsensitivity, self.original_Ysensitivity)
         logger.debug(f"鼠标视角旋转: {direction}, 角度: {angle}, 像素: {pixels}")
-
-    def execute_mouse_move(self, dx, dy):
-        """
-        优化：复用 genshin_interaction 实例，避免频繁创建对象。
-        """
-        self.try_bring_to_front()
-
-        # 使用缓存的实例
-        self.genshin_interaction.move_mouse_relative(int(dx), int(dy))
 
 
 def normalize_key(key: str) -> str:

@@ -316,13 +316,13 @@ class Auto70jjbTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         self._release_all_move_keys()
         self.reset_and_transport()
 
-    def walk_to_aim(self):
+    def walk_to_aim(self, delay=0):
         """
         主寻路函数：根据识别到的坐标选择路径
         """
         try:
             self.send_key_down("lalt")
-            self.sleep(2) # 保持原有的启动延迟
+            self.sleep(delay)
 
             # 使用 if-elif 结构，优先级清晰，且只执行一个分支
             if self.find_track_point(0.20, 0.54, 0.22, 0.59):

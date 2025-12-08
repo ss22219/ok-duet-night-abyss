@@ -3,11 +3,10 @@ import time
 import json
 import os
 
-from ok import Logger, TaskDisabledException, GenshinInteraction
+from ok import Logger, TaskDisabledException
 from src.tasks.DNAOneTimeTask import DNAOneTimeTask
 from src.tasks.BaseCombatTask import BaseCombatTask
 from src.tasks.CommissionsTask import CommissionsTask, Mission
-from src.tasks.AutoExcavation import AutoExcavation
 from src.tasks.trigger.AutoMazeTask import AutoMazeTask
 
 logger = Logger.get_logger(__name__)
@@ -36,7 +35,6 @@ class AutoEscortTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
             "启用自动穿引共鸣",
             "使用技能",
             "技能释放频率",
-            "发出声音提醒",
         ]
         for key in keys_to_remove:
             self.default_config.pop(key, None)
@@ -321,7 +319,7 @@ class AutoEscortTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
 
         # 使用 AutoExcavation 的 find_track_point 方法检测位置
         try:
-            track_point = AutoExcavation.find_track_point(self)
+            track_point = self.find_track_point()
 
             if track_point is None:
                 logger.warning("❌ 未检测到 track_point，无法确定路径，重新开始任务...")
@@ -460,18 +458,12 @@ class AutoEscortTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
                 delay = 0
 
             # 等待指定的延迟时间（使用高精度等待）
-            if delay > 0:
-                if delay > 0.001:
-                    # 先 sleep 大部分时间，预留 0.5ms 缓冲
-                    time.sleep(max(0, delay - 0.0005))
+            target = time.perf_counter() + delay
+            if delay > 0.02:
+                self.sleep(delay - 0.02)
 
-                    # 自旋等待，提高时间精度
-                    end_time = time.perf_counter() + 0.0005
-                    while time.perf_counter() < end_time:
-                        pass
-                else:
-                    # 短延迟直接 sleep
-                    time.sleep(delay)
+            while time.perf_counter() < target:
+                pass
 
             # 执行不同类型的动作
             if action_type == "mouse_rotation":
@@ -495,7 +487,7 @@ class AutoEscortTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
             else:
                 logger.warning(f"未知动作类型: {action_type}")
 
-    def wait_for_puzzle_completion(self, timeout=30):
+    def wait_for_puzzle_completion(self, timeout=10):
         """等待 AutoMazeTask 完成解密
 
         主动检测 puzzle 并触发解密，然后等待解密完成
@@ -551,24 +543,6 @@ class AutoEscortTask(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
         else:
             logger.warning(f"未知的鼠标方向: {direction}")
             return
-
-        # 使用 GenshinInteraction 的 move_mouse_relative 方法
-        interaction = self.executor.interaction
-        if isinstance(interaction, GenshinInteraction):
-            # 直接使用当前的 GenshinInteraction
-            # 确保窗口在前台，move_mouse_relative 需要窗口处于前台
-            self.executor.device_manager.hwnd_window.bring_to_front()
-            interaction.move_mouse_relative(int(dx), int(dy))
-        else:
-            # PostMessageInteraction 不支持相对移动，需要使用 GenshinInteraction
-            # 使用缓存的实例，避免重复创建
-            if self._genshin_interaction is None:
-                logger.debug("创建 GenshinInteraction 实例用于相对鼠标移动")
-                self._genshin_interaction = GenshinInteraction(
-                    interaction.capture, self.executor.device_manager.hwnd_window
-                )
-            # 确保窗口在前台
-            self.executor.device_manager.hwnd_window.bring_to_front()
-            self._genshin_interaction.move_mouse_relative(int(dx), int(dy))
-
+        
+        self.move_mouse_relative(dx, dy)
         logger.debug(f"鼠标视角旋转: {direction}, 角度: {angle}, 像素: {pixels}")

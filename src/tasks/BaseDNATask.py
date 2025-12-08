@@ -5,10 +5,13 @@ import cv2
 import winsound
 import win32api
 import win32con
+import random
+
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
+from functools import cached_property
 
-from ok import BaseTask, Box, Logger, color_range_to_bound, run_in_new_thread, og
+from ok import BaseTask, Box, Logger, color_range_to_bound, run_in_new_thread, og, GenshinInteraction, PyDirectInteraction
 
 logger = Logger.get_logger(__name__)
 f_black_color = {
@@ -73,6 +76,8 @@ class BaseDNATask(BaseTask):
         self.old_mouse_pos = None
         self.next_monthly_card_start = 0
         self._logged_in = False
+        self.hold_lalt = False
+        self.sensitivity_config = self.get_global_config('Game Sensitivity Config')  # 游戏灵敏度配置
 
     @property
     def f_search_box(self) -> Box:
@@ -87,14 +92,40 @@ class BaseDNATask(BaseTask):
     @property
     def thread_pool_executor(self) -> ThreadPoolExecutor:
         return og.my_app.get_thread_pool_executor()
+    
+    @property
+    def shared_frame(self) -> np.ndarray:
+        return og.my_app.shared_frame
+    
+    @shared_frame.setter
+    def shared_frame(self, value):
+        og.my_app.shared_frame = value
 
-    def in_team(self) -> bool:
-        frame = self.frame
+    @cached_property
+    def genshin_interaction(self):
+        """
+        缓存 Interaction 实例，避免每次鼠标移动都重新创建对象。
+        需要确保 self.executor.interaction 和 self.hwnd 在此类初始化时可用。
+        """
+        # 确保引用的是正确的类
+        return GenshinInteraction(self.executor.interaction.capture, self.hwnd)
+    
+    @cached_property
+    def pydirect_interaction(self):
+        """
+        缓存 Interaction 实例，避免每次鼠标移动都重新创建对象。
+        需要确保 self.executor.interaction 和 self.hwnd 在此类初始化时可用。
+        """
+        # 确保引用的是正确的类
+        return PyDirectInteraction(self.executor.interaction.capture, self.hwnd)
+
+    def in_team(self, frame=None) -> bool:
+        _frame = self.frame if frame is None else frame
         if self.find_one('lv_text', frame=frame, threshold=0.8):
             return True
         # start_time = time.perf_counter()
         mat = self.get_feature_by_name("ultimate_key_icon").mat
-        mat2 = self.get_box_by_name("ultimate_key_icon").crop_frame(frame)
+        mat2 = self.get_box_by_name("ultimate_key_icon").crop_frame(_frame)
         max_area1 = invert_max_area_only(mat)[2]
         max_area2 = invert_max_area_only(mat2)[2]
         result = False
@@ -161,10 +192,10 @@ class BaseDNATask(BaseTask):
         return default
 
     def soundBeep(self, _n=None):
-        if hasattr(self, "config") and not self.config.get("发出声音提醒", True):
+        if not self.afk_config.get("提示音", True):
             return
         if _n is None:
-            n = max(1, self.afk_config.get("提示音", 1))
+            n = max(1, self.afk_config.get("提示音次数", 1))
         else:
             n = _n
         run_in_new_thread(
@@ -178,13 +209,13 @@ class BaseDNATask(BaseTask):
         if self.afk_config["防止鼠标干扰"]:
             self.old_mouse_pos = win32api.GetCursorPos() if save_current_pos else None
             if self.rel_move_if_in_win(0.95, 0.6, box=box):
-                self.sleep(0.01)
+                self.sleep(0.001)
             else:
                 self.old_mouse_pos = None
 
     def move_back_from_safe_position(self):
         if self.afk_config["防止鼠标干扰"] and self.old_mouse_pos is not None:
-            self.sleep(0.01)
+            self.sleep(0.001)
             win32api.SetCursorPos(self.old_mouse_pos)
             self.old_mouse_pos = None
 
@@ -278,6 +309,75 @@ class BaseDNATask(BaseTask):
         return (win_x <= mouse_x < win_x + hwnd_window.window_width) and \
             (win_y <= mouse_y < win_y + hwnd_window.window_height)
     
+    def set_mouse_in_window(self):
+        """
+        设置鼠标在游戏窗口范围内。
+        """
+        if self.is_mouse_in_window():
+            return
+        random_x = random.randint(self.width_of_screen(0.2), self.width_of_screen(0.8))
+        random_y = random.randint(self.height_of_screen(0.2), self.height_of_screen(0.8))
+        abs_pos = self.executor.interaction.capture.get_abs_cords(random_x, random_y)
+        win32api.SetCursorPos(abs_pos)
+    
+    def _perform_random_click(self, x_abs, y_abs, use_safe_move=False, safe_move_box=None, down_time=0.0, post_sleep=0.0, after_sleep=0.0):
+        x = int(x_abs)
+        y = int(y_abs)
+
+        down_time = random.uniform(0.05, 0.12) + down_time
+        after_sleep = random.uniform(0.08, 0.15) + after_sleep
+        post_sleep = 0.15 if post_sleep < 0.15 else post_sleep
+
+        if not self.hwnd.is_foreground():
+            interval = random.uniform(0.08, 0.15)
+            self.sleep(random.uniform(0.08, post_sleep))
+            if use_safe_move:
+                self.move_mouse_to_safe_position(box=safe_move_box)
+                down_time = 0.01 if down_time == 0.0 else down_time
+            self.click(x, y, down_time=down_time, interval=interval)
+            if use_safe_move:
+                self.move_back_from_safe_position()
+        else:
+            self.sleep(random.uniform(0.08, post_sleep))
+            self.pydirect_interaction.move(x, y)
+            self.sleep(random.uniform(0.08, 0.12))
+            self.pydirect_interaction.click(down_time=down_time)
+
+        self.sleep(after_sleep)
+    
+    def click_box_random(self, box: Box, down_time=0.0, post_sleep=0.0, after_sleep=0.0, use_safe_move=False, safe_move_box=None, left_extend=0.0, right_extend=0.0, up_extend=0.0, down_extend=0.0):
+        le_px = left_extend * self.width
+        re_px = right_extend * self.width
+        ue_px = up_extend * self.height
+        de_px = down_extend * self.height
+
+        random_x = random.uniform(box.x - le_px, box.x + box.width + re_px)
+        random_y = random.uniform(box.y - ue_px, box.y + box.height + de_px)
+
+        self._perform_random_click(
+            random_x, random_y, 
+            use_safe_move, safe_move_box, 
+            down_time, post_sleep, after_sleep
+        )
+
+    def click_relative_random(self, x1, y1, x2, y2, down_time=0.0, post_sleep=0.0, after_sleep=0.0, use_safe_move=False, safe_move_box=None):
+        r_x = random.uniform(x1, x2)
+        r_y = random.uniform(y1, y2)
+
+        abs_x = self.width_of_screen(r_x)
+        abs_y = self.height_of_screen(r_y)
+
+        self._perform_random_click(
+            abs_x, abs_y, 
+            use_safe_move, safe_move_box, 
+            down_time, post_sleep, after_sleep
+        )
+
+    def sleep_random(self, timeout, random_range: tuple = (1.0, 1.0)):
+        multiplier = random.uniform(random_range[0], random_range[1])
+        final_timeout = timeout * multiplier
+        self.sleep(final_timeout)
+
     def is_mouse_in_box(self, box: Box) -> bool:
         """
         检测鼠标是否在给定的 Box 内。
@@ -314,7 +414,7 @@ class BaseDNATask(BaseTask):
         win32api.SetCursorPos(abs_pos)
         return True
 
-    def create_ticker(self, action: Callable, interval: Union[float, int, Callable] = 1.0) -> Ticker:
+    def create_ticker(self, action: Callable, interval: Union[float, int, Callable] = 1.0, interval_random_range: tuple = (1.0, 1.0)) -> Ticker:
         last_time = 0
         armed = False
 
@@ -334,15 +434,16 @@ class BaseDNATask(BaseTask):
                 armed = False
                 return
 
-            current_interval = get_interval()
+            multiplier = random.uniform(interval_random_range[0], interval_random_range[1])
+            current_interval = get_interval() * multiplier
 
-            if now - last_time >= current_interval:
+            if last_time < 0 or now - last_time >= current_interval:
                 last_time = now
                 action()
 
         def reset():
             nonlocal last_time
-            last_time = 0
+            last_time = -1
 
         def touch():
             nonlocal last_time
@@ -380,13 +481,168 @@ class BaseDNATask(BaseTask):
             str: 螺旋飞跃的按键字符串。
         """
         return self.key_config['HelixLeap Key']
-    
+        
+    def calculate_sensitivity(self, dx, dy, original_Xsensitivity=1.0, original_Ysensitivity=1.0):
+        """计算玩家水平鼠标移动值和垂直鼠标移动值,并且移动鼠标.
+
+        Returns:
+            int: 玩家水平鼠标移动值
+            int: 玩家垂直鼠标移动值
+
+        """
+        # 判断设置中灵敏度开关是否打开
+        if self.sensitivity_config['Game Sensitivity Switch']:
+            # 获取设置中的游戏灵敏度
+            game_Xsensitivity = self.sensitivity_config['X-axis sensitivity']
+            game_Ysensitivity = self.sensitivity_config['Y-axis sensitivity']
+
+            # 判断和计算
+            if original_Xsensitivity == game_Xsensitivity and original_Ysensitivity == game_Ysensitivity:
+                calculate_dx = dx
+                calculate_dy = dy
+            else:
+                calculate_dx = round(dx / (game_Xsensitivity / original_Xsensitivity))
+                calculate_dy = round(dy / (game_Ysensitivity / original_Ysensitivity))
+        else:
+            calculate_dx = dx
+            calculate_dy = dy
+
+        return calculate_dx, calculate_dy
+
+    def move_mouse_relative(self, dx, dy, original_Xsensitivity=1.0, original_Ysensitivity=1.0):
+        dx, dy = self.calculate_sensitivity(dx, dy, original_Xsensitivity, original_Ysensitivity)
+        self.try_bring_to_front()
+        self.genshin_interaction.move_mouse_relative(int(dx), int(dy))
+
     def try_bring_to_front(self):
         if not self.hwnd.is_foreground():
-            win32api.keybd_event(win32con.VK_MENU, 0, 0, 0)
-            win32api.keybd_event(win32con.VK_MENU, 0, win32con.KEYEVENTF_KEYUP, 0)
-            self.hwnd.bring_to_front()
+            def key_press(key, after_sleep=0):
+                win32api.keybd_event(key, 0, 0, 0)
+                win32api.keybd_event(key, 0, win32con.KEYEVENTF_KEYUP, 0)
+                self.sleep(after_sleep)
+
+            key_press(win32con.VK_MENU)
+            try:
+                self.hwnd.bring_to_front()
+            except Exception:
+                key_press(win32con.VK_LWIN, 0.1)
+                key_press(win32con.VK_LWIN, 0.1)
+                key_press(win32con.VK_MENU)
+                self.hwnd.bring_to_front()
             self.sleep(0.5)
+        
+    def setup_jitter(self):
+        lalt_pressed = False
+        needs_resync = False
+        _in_team = None
+
+        def sleep(timeout):
+            deadline = time.time() + timeout
+            while time.time() < deadline:
+                if self.executor.current_task is None or self.executor.exit_event.is_set():
+                    self.log_info("jitter loop task stopped")
+                    return
+                check_alt()
+                time.sleep(0.1)
+
+        def send_key_down(key):
+            interaction = self.executor.interaction
+            vk_code = interaction.get_key_by_str(key)
+            interaction.post(win32con.WM_KEYDOWN, vk_code, interaction.lparam)
+
+        def send_key_up(key):
+            interaction = self.executor.interaction
+            vk_code = interaction.get_key_by_str(key)
+            interaction.post(win32con.WM_KEYUP, vk_code, interaction.lparam)
+
+        def send_key(key, down_time=0.02, after_sleep=0.0):
+            interaction = self.executor.interaction
+            vk_code = interaction.get_key_by_str(key)
+            interaction.post(win32con.WM_KEYDOWN, vk_code, interaction.lparam)
+            time.sleep(down_time)
+            interaction.post(win32con.WM_KEYUP, vk_code, interaction.lparam)
+            time.sleep(after_sleep)
+
+        def in_team():
+            nonlocal _in_team
+            local_frame = self.shared_frame 
+            if _in_team is None and local_frame is not None:
+                _in_team = self.in_team(local_frame)
+            elif local_frame is None:
+                _in_team = True
+            return _in_team
+
+        def check_alt():
+            nonlocal lalt_pressed, needs_resync, _in_team
+            if not self.afk_config.get("鼠标抖动", True):
+                return
+            if self.hold_lalt:
+                if not lalt_pressed:
+                    self.log_info("[LAlt保持] 激活: 按下 LAlt")
+                    send_key_down("lalt")
+                    time.sleep(0.1)
+                    lalt_pressed = True
+                elif not needs_resync and lalt_pressed and not in_team():
+                    self.log_info("[LAlt保持] 暂停: 检测到不在队伍，暂时释放 LAlt")
+                    needs_resync = True
+                    send_key_up("lalt")
+                elif needs_resync and in_team():
+                    self.log_info("[LAlt保持] 恢复: 检测到重回队伍，重新按下 LAlt")
+                    needs_resync = False
+                    send_key_down("lalt")
+                _in_team = None
+            else:
+                if lalt_pressed:
+                    self.log_info("[LAlt保持] 停止: 功能关闭，彻底释放 LAlt")
+                    send_key_up("lalt")
+                    lalt_pressed = False
+                    needs_resync = False
+
+        def _jitter_loop_task():
+            current_drift = [0, 0]
+            spiral_key = self.get_spiral_dive_key()
+            numeric_keys = [str(i) for i in range(1, 6) if str(i) != spiral_key][:4]
+            random_key = [self.key_config['Geniemon Key']] + numeric_keys
+
+            if self.executor.current_task:
+                self.log_info("jitter loop task start")
+
+            while self.executor.current_task is not None and not self.executor.exit_event.is_set():
+                if self.executor.paused:
+                    time.sleep(0.1)
+                    continue
+                
+                check_alt()
+
+                key = random.choice(random_key)
+                down_time = random.uniform(0.02, 0.12)
+                after_sleep = random.uniform(0.08, 0.15)
+                send_key(key, down_time, after_sleep)
+
+                if self.afk_config.get("鼠标抖动", True):
+                    if self.afk_config.get("鼠标抖动锁定在窗口范围", True):
+                        self.set_mouse_in_window()
+
+                    dist_sq = current_drift[0]**2 + current_drift[1]**2
+                    
+                    if dist_sq < 4:
+                        target_x = random.choice([-3, -2, 2, 3])
+                        target_y = random.choice([-3, -2, 2, 3])
+                    else:
+                        target_x = random.randint(-1, 1)
+                        target_y = random.randint(-1, 1)
+
+                    move_x = target_x - current_drift[0]
+                    move_y = target_y - current_drift[1]
+
+                    if move_x != 0 or move_y != 0:
+                        self.genshin_interaction.do_move_mouse_relative(move_x, move_y)
+                        current_drift[0] += move_x
+                        current_drift[1] += move_y
+
+                sleep(random.uniform(3.0, 6.0))
+
+        self.thread_pool_executor.submit(_jitter_loop_task)
 
 track_point_color = {
     "r": (121, 255),  # Red range
