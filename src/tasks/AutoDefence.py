@@ -150,6 +150,13 @@ class AutoDefence(DNAOneTimeTask, CommissionsTask, BaseCombatTask):
             self.log_info("任务开始，执行外部移动逻辑")
             self.external_movement()
             self.log_info(f"外部移动执行完毕，等待战斗开始，{DEFAULT_ACTION_TIMEOUT+10}秒后超时")
+            # 走到目标位置后重置技能计时
+            self.skill_tick.reset()
+            self.aim_shoot_tick.reset()
+            # 重置技能计时器字典
+            if hasattr(self, "skill_timers"):
+                for key in self.skill_timers:
+                    self.skill_timers[key] = 0
             if not self.wait_until(lambda: self.current_wave != -1, post_action=self.get_wave_info,
                                    time_out=DEFAULT_ACTION_TIMEOUT+10):
                 self.log_info("等待战斗开始超时，重开任务")
